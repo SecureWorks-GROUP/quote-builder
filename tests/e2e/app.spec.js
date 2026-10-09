@@ -8,7 +8,7 @@ test.beforeEach(async ({ page }) => {
   db = seed();
   await install(page, db);
   await page.addInitScript(() => { window.QB_PDF_PLAIN = true; });
-  page.on('pageerror', (e) => console.log('PAGEERROR', e.message, e.stack));
+  page.on('pageerror', (e) => { throw e; });
 });
 
 async function signIn(page) {
@@ -90,6 +90,8 @@ test('scope a repair job: costs on top, client charge below, autosave, issue a P
 
   const pdfKey = Object.keys(db.files).find((k) => k.startsWith('job-pdfs/'));
   const pdf = db.files[pdfKey].body.toString('latin1');
+  require('fs').mkdirSync('test-results/shots', { recursive: true });
+  require('fs').writeFileSync(`test-results/shots/${test.info().project.name}-quote.pdf`, db.files[pdfKey].body);
   expect(pdf.startsWith('%PDF')).toBe(true);
   expect(db.files[pdfKey].type).toBe('application/pdf');
   expect(pdf).toContain('SWR-26101-Q1');

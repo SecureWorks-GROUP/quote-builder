@@ -61,7 +61,8 @@
   function header(doc, logo, quoteNumber, dateText) {
     doc.setFillColor.apply(doc, ORANGE);
     doc.rect(0, 0, PAGE_W, BAND_H, 'F');
-    var logoH = 10, logoW = logoH * (1805 / 319);
+    // assets/logo-white.png is 1600 x 319 (the old "WA" mark is cropped off; "Group" is drawn as text).
+    var logoH = 10, logoW = logoH * (1600 / 319);
     var logoY = (BAND_H - logoH) / 2;
     if (logo) {
       doc.addImage(logo, 'PNG', MARGIN, logoY, logoW, logoH);

@@ -92,7 +92,7 @@
     return el('header', { class: 'topbar' },
       el('div', { class: 'topbar-left' },
         back ? el('a', { class: 'btn btn-back', href: back.href, text: '‹ ' + back.label }) :
-          el('a', { class: 'brand', href: '#/' }, el('img', { src: 'assets/logo-white.png', alt: 'SecureWorks' }), el('span', { text: 'Quote builder' }))),
+          el('a', { class: 'brand', href: '#/' }, el('img', { src: 'assets/logo-white.png', alt: 'SecureWorks' }), el('span', { class: 'brand-group', text: 'Group' }), el('span', { class: 'brand-app', text: 'Quote builder' }))),
       el('div', { class: 'topbar-right' },
         el('span', { class: 'net ' + (state.online ? 'on' : 'off'), text: state.online ? '' : 'Offline' }),
         state.pending.length ? el('span', { class: 'pill pill-warn', text: state.pending.length + ' photo' + (state.pending.length > 1 ? 's' : '') + ' waiting' }) : null,
@@ -126,7 +126,7 @@
         btn.disabled = false; btn.textContent = 'Sign in';
       }
     } },
-      el('img', { class: 'signin-logo', src: 'assets/logo-white.png', alt: 'SecureWorks Group' }),
+      el('div', { class: 'signin-brand' }, el('img', { class: 'signin-logo', src: 'assets/logo-white.png', alt: 'SecureWorks' }), el('span', { text: 'Group' })),
       el('h1', { text: 'Quote builder' }),
       el('p', { class: 'muted-light', text: 'Sign in with your SecureWorks login (the same one as the fence and patio tools).' }),
       el('label', { for: 'email', text: 'Email' }), email,
@@ -531,7 +531,9 @@
   function numInput(value, onchange, disabled, cls) {
     var i = el('input', { type: 'text', inputmode: 'decimal', class: 'num ' + (cls || ''), value: value === 0 || value ? String(value) : '', disabled: disabled, placeholder: '0' });
     i.addEventListener('input', function () { onchange(i.value); });
-    i.addEventListener('focus', function () { setTimeout(function () { try { i.select(); } catch (e) { /* ignore */ } }, 0); });
+    // Select on focus so a typed number replaces the 0. select() also focuses the field, so
+    // only do it if the field still has focus, or a quick tap to the next field types here.
+    i.addEventListener('focus', function () { setTimeout(function () { if (document.activeElement === i) { try { i.select(); } catch (e) { /* ignore */ } } }, 0); });
     return i;
   }
 

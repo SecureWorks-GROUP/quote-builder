@@ -74,6 +74,9 @@ h2 { font-size: 19px; margin: 0; color: var(--sw-blue-dark); }
 .topbar-left, .topbar-right { display: flex; align-items: center; gap: 12px; }
 .brand { display: flex; align-items: center; gap: 12px; color: #fff; text-decoration: none; font-weight: 700; font-size: 17px; }
 .brand img { height: 26px; width: auto; }
+.brand-group { font-weight: 500; margin-left: -6px; }
+.brand-app { padding-left: 12px; border-left: 1px solid rgba(255,255,255,.35); }
+@media (max-width: 520px) { .brand-app { display: none; } }
 .net.off { background: var(--err); padding: 4px 10px; border-radius: 999px; font-size: 14px; font-weight: 700; }
 
 /* Pages */
@@ -104,6 +107,7 @@ h2 { font-size: 19px; margin: 0; color: var(--sw-blue-dark); }
 .signin-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; background: var(--sw-blue-dark); border-top: 4px solid var(--sw-orange); }
 .signin-card { width: 100%; max-width: 420px; color: #fff; }
 .signin-card h1 { color: #fff; margin-top: 18px; }
+.signin-brand { display: flex; align-items: flex-end; gap: 8px; font-size: 20px; }
 .signin-logo { height: 40px; }
 .signin-card label { display: block; margin: 16px 0 6px; font-weight: 700; }
 .signin-card input { width: 100%; }
