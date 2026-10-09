@@ -1,0 +1,16 @@
+{
+  "name": "quote-builder",
+  "private": true,
+  "description": "SecureWorks Group quote builder. Static site, no build step; this file only holds the test tools.",
+  "scripts": {
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "node --test tests/unit/",
+    "test:e2e": "playwright test",
+    "serve": "node tests/serve.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "@supabase/supabase-js": "2.45.4",
+    "jspdf": "3.0.3"
+  }
+}
