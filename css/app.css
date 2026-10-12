@@ -88,7 +88,6 @@ h2 { font-size: 19px; margin: 0; color: var(--sw-blue-dark); }
 .banner { padding: 12px 16px; border-radius: 10px; margin: 12px 0; }
 .banner-warn { background: var(--warn-soft); color: var(--warn); }
 .banner-error { background: var(--err-soft); color: var(--err); }
-.conflict p { margin: 0 0 10px; }
 .empty { padding: 40px 0; text-align: center; color: var(--sw-text-sec); }
 
 .pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 13px; font-weight: 700; background: var(--sw-tint); color: var(--sw-blue-mid); white-space: nowrap; }
@@ -231,7 +230,6 @@ input[type=checkbox] { width: 26px; height: 26px; accent-color: var(--sw-orange)
 .photo { background: var(--sw-tint); border-radius: 10px; padding: 8px; border: 2px solid transparent; display: flex; flex-direction: column; gap: 8px; }
 .photo.on { border-color: var(--sw-orange); }
 .photo img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 6px; display: block; background: #dde3e8; }
-.photo.pending img { opacity: .6; }
 .photo-pick { display: flex; align-items: center; gap: 10px; min-height: 44px; font-weight: 700; cursor: pointer; }
 
 .editor-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: flex-end; margin: 20px 0; }

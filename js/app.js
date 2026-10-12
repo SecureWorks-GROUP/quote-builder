@@ -18,7 +18,7 @@
     search: '',
     bundles: {},      // job_id -> quote_builder_get_job response
     editor: null,     // the open scope or variation editor
-    pending: [],      // photos waiting to upload
+    uploading: {},    // job_id -> photos uploading right now
     online: navigator.onLine !== false
   };
 
@@ -95,7 +95,6 @@
           el('a', { class: 'brand', href: '#/' }, el('img', { src: 'assets/logo-white.png', alt: 'SecureWorks' }), el('span', { class: 'brand-group', text: 'Group' }), el('span', { class: 'brand-app', text: 'Quote builder' }))),
       el('div', { class: 'topbar-right' },
         el('span', { class: 'net ' + (state.online ? 'on' : 'off'), text: state.online ? '' : 'Offline' }),
-        state.pending.length ? el('span', { class: 'pill pill-warn', text: state.pending.length + ' photo' + (state.pending.length > 1 ? 's' : '') + ' waiting' }) : null,
         user ? el('button', { class: 'btn btn-ghost-light', text: 'Sign out', onclick: signOut }) : null));
   }
 
@@ -146,8 +145,6 @@
   }
 
   // ---------- Job list ----------
-  function listCacheKey() { return 'qb:list:' + state.lane + ':' + (state.lane === 'repair' ? state.stageFilter : 'all'); }
-
   async function renderList() {
     clear(app);
     append(app, topbar());
@@ -174,26 +171,26 @@
     append(main, listEl);
 
     var jobs = null, note = '';
-    var cached = store.getJSON(listCacheKey());
-    if (cached) { jobs = cached.jobs; drawJobs(); }
     try {
       var stages = state.lane === 'repair' ? L.STAGE_FILTERS.filter(function (f) { return f.key === state.stageFilter; })[0].stages : null;
       var r = await api.listJobs(state.lane, stages);
       jobs = r.jobs || [];
-      note = '';
-      store.setJSON(listCacheKey(), { jobs: jobs, at: new Date().toISOString() });
     } catch (e) {
-      note = errorText(e) + (cached ? ' Showing the list from ' + L.fmtDateTime(cached.at) + '.' : '');
-      if (!jobs) jobs = [];
+      note = errorText(e);
     }
     drawJobs();
 
     function drawJobs() {
+      if (note) {
+        clear(listEl);
+        append(listEl, el('p', { class: 'banner banner-warn', text: note }), el('button', { class: 'btn', text: 'Try again', onclick: renderList }));
+        return;
+      }
+      if (!jobs) return;
       clear(listEl);
-      if (note) append(listEl, el('p', { class: 'banner banner-warn', text: note }));
-      var shown = L.filterJobs(jobs || [], state.search);
+      var shown = L.filterJobs(jobs, state.search);
       if (!shown.length) {
-        append(listEl, el('p', { class: 'empty', text: jobs && jobs.length ? 'No jobs match that search.' :
+        append(listEl, el('p', { class: 'empty', text: jobs.length ? 'No jobs match that search.' :
           state.lane === 'repair' ? 'No repair jobs at this stage.' : 'No private quotes yet. Tap New private quote to start one.' }));
         return;
       }
@@ -246,9 +243,12 @@
       return o;
     }));
     f.category = cat;
+    // The request_id belongs to the details it was sent with: any change after a failed
+    // attempt drops it, so only an unchanged retry can land on the job that attempt made.
     function persist() {
-      var v = { request_id: saved.request_id };
+      var v = {};
       Object.keys(f).forEach(function (k) { v[k] = f[k].value; });
+      if (saved.request_id && Object.keys(f).every(function (k) { return v[k] === saved[k]; })) v.request_id = saved.request_id;
       saved = v;
       store.setJSON('qb:pending-private', v);
     }
@@ -258,7 +258,7 @@
       e.preventDefault();
       persist();
       if (!saved.client_name || !saved.client_name.trim()) { err.textContent = 'Client name is needed.'; return; }
-      // One request_id per new job, kept across retries so a dropped reply never makes two jobs.
+      // One request_id per new job, kept across unchanged retries so a dropped reply never makes two jobs.
       if (!saved.request_id) { saved.request_id = L.uuid(); store.setJSON('qb:pending-private', saved); }
       btn.disabled = true; btn.textContent = 'Creating…'; err.textContent = '';
       try {
@@ -269,7 +269,6 @@
           category: saved.category || 'private_renovation', notes: saved.notes || ''
         });
         store.remove('qb:pending-private');
-        store.remove('qb:list:private:all');
         toast((r.created === false ? 'Opened ' : 'Created ') + (r.job.job_number || 'job'));
         location.hash = '#/job/' + r.job.id;
       } catch (ex) {
@@ -289,22 +288,10 @@
   }
 
   // ---------- Job bundle ----------
-  function bundleKey(jobId) { return 'qb:job:' + jobId; }
-
-  async function loadBundle(jobId, force) {
-    if (!force && state.bundles[jobId]) return state.bundles[jobId];
-    try {
-      var b = await api.getJob(jobId);
-      state.bundles[jobId] = b;
-      store.setJSON(bundleKey(jobId), { bundle: b, at: new Date().toISOString() });
-      return b;
-    } catch (e) {
-      if (e.code === 'network') {
-        var c = store.getJSON(bundleKey(jobId));
-        if (c) { c.bundle._offlineAt = c.at; state.bundles[jobId] = c.bundle; return c.bundle; }
-      }
-      throw e;
-    }
+  async function loadBundle(jobId) {
+    var b = await api.getJob(jobId);
+    state.bundles[jobId] = b;
+    return b;
   }
 
   function jobHeader(job, active) {
@@ -339,7 +326,7 @@
     var main = el('main', { class: 'page' }, el('p', { class: 'muted', text: 'Loading job…' }));
     append(app, main);
     var b;
-    try { b = await loadBundle(jobId, true); }
+    try { b = await loadBundle(jobId); }
     catch (e) {
       clear(main);
       append(main, el('p', { class: 'banner banner-error', text: e.status === 404 ? 'That job was not found.' : errorText(e) }),
@@ -348,7 +335,6 @@
     }
     clear(main);
     append(main, jobHeader(b.job, active));
-    if (b._offlineAt) append(main, el('p', { class: 'banner banner-warn', text: 'Offline. Showing this job as it was at ' + L.fmtDateTime(b._offlineAt) + '. Edits save on this iPad and upload when signal is back.' }));
     fn(main, b);
   }
 
@@ -377,26 +363,26 @@
       locked: !!(latest && latest.status === 'issued'),
       syncedFp: null,
       saving: false, again: false, timer: null, retryTimer: null,
-      status: '', conflict: null,
-      knownChains: (b.variations || []).map(function (v) { return v.chain_id; }),
+      status: '',
       variation: chain && kind === 'variation' ? chain : null,
       dom: {}
     };
     ed.syncedFp = latest ? L.draftFingerprint(ed.draft) : L.draftFingerprint(L.emptyDraft());
 
+    if (staleKey !== key) staleKey = null;
+    // A decided variation takes no more versions, so a backup for it can never be saved.
+    if (local && local.dirty && ed.locked && !canRevise(ed)) { store.remove(key); local = null; }
+    // The draft backup: edits that never reached the office go back on top of the saved copy.
     if (local && local.dirty) {
-      if ((local.base_version_id || null) === ed.baseVersionId) {
-        ed.draft = local.draft; ed.locked = false;
-        if (local.chain_id && !ed.chainId) ed.chainId = local.chain_id;
-      } else {
-        ed.conflict = local;
-      }
+      if ((local.base_version_id || null) !== ed.baseVersionId) ed.notice = 'Unsaved edits kept on this iPad from ' + L.fmtDateTime(local.updated_at) + ' have been put on top of the saved quote. Check it before issuing.';
+      ed.draft = local.draft; ed.locked = false;
+      if (local.chain_id && !ed.chainId) ed.chainId = local.chain_id;
     }
     if (!ed.draft.cost_lines.length) ed.draft.cost_lines.push(L.blankCostLine());
     if (!ed.draft.charge_lines.length) ed.draft.charge_lines.push(L.blankChargeLine());
     state.editor = ed;
     renderEditor(main, b, ed);
-    if (!ed.conflict && local && local.dirty) scheduleSave(ed, 300);
+    if (local && local.dirty) scheduleSave(ed, 300);
   }
 
   function renderEditor(main, b, ed) {
@@ -408,21 +394,7 @@
     ed.dom.versionBar = el('div', { class: 'version-bar' });
     append(wrap, ed.dom.versionBar);
     drawVersionBar(b, ed);
-
-    if (ed.conflict) {
-      var c = ed.conflict;
-      append(wrap, el('div', { class: 'banner banner-warn conflict' },
-        el('p', { text: 'This iPad has edits from ' + L.fmtDateTime(c.updated_at) + ' that were never saved, but this quote has changed since (another save or an issue). Pick which to keep.' }),
-        el('div', { class: 'row-actions' },
-          el('button', { class: 'btn btn-primary', text: 'Keep my iPad edits', onclick: function () {
-            // Save them on top of the newest version (base = what the server has now).
-            ed.draft = c.draft; ed.locked = false; ed.conflict = null;
-            writeLocal(ed, true); rerenderEditorOnly(state.bundles[ed.job.id], ed); scheduleSave(ed, 50);
-          } }),
-          el('button', { class: 'btn', text: 'Use the saved version', onclick: function () {
-            store.remove(ed.key); ed.conflict = null; rerender();
-          } }))));
-    }
+    if (ed.notice) append(wrap, el('p', { class: 'banner banner-warn', text: ed.notice }));
 
     // Title and scope write-up (prints on the client quote)
     var title = el('input', { type: 'text', class: 'title-input', placeholder: ed.kind === 'variation' ? 'Variation title, e.g. Extra fascia found rotten' : 'Quote title, e.g. Storm damage repairs', value: ed.draft.title, disabled: ed.locked,
@@ -654,9 +626,8 @@
     var b = state.bundles[ed.job.id] || {};
     var photos = b.photos || [];
     var sel = ed.draft.photo_media_ids || [];
-    if (!photos.length && !state.pending.some(function (p) { return p.job_id === ed.job.id; })) {
-      append(grid, el('p', { class: 'muted', text: 'No photos yet.' }));
-    }
+    var busy = state.uploading[ed.job.id] || 0;
+    if (!photos.length && !busy) append(grid, el('p', { class: 'muted', text: 'No photos yet.' }));
     photos.forEach(function (p) {
       var on = sel.indexOf(p.id) !== -1;
       var cb = el('input', { type: 'checkbox', checked: on, disabled: ed.locked, onchange: function () {
@@ -665,53 +636,24 @@
         card.classList.toggle('on', cb.checked);
         changed(ed);
       } });
-      var cap = el('input', { type: 'text', class: 'caption', placeholder: 'Caption', value: captionFor(p) });
-      cap.addEventListener('change', function () { saveCaption(p, cap.value); });
+      var cap = el('input', { type: 'text', class: 'caption', placeholder: 'Caption', value: p.caption || '' });
+      cap.addEventListener('change', function () { saveCaption(p, cap); });
       var card = el('div', { class: 'photo' + (on ? ' on' : '') },
         el('a', { href: p.url, target: '_blank', rel: 'noopener' }, el('img', { src: p.url, alt: p.caption || 'Site photo', loading: 'lazy' })),
         cap,
         el('label', { class: 'photo-pick' }, cb, el('span', { text: 'On quote' })));
       append(grid, card);
     });
-    state.pending.filter(function (p) { return p.job_id === ed.job.id; }).forEach(function (p) {
-      var cap = el('input', { type: 'text', class: 'caption', placeholder: 'Caption', value: p.caption || '' });
-      cap.addEventListener('input', function () { p.caption = cap.value; store.pendingPhotos.put(p); });
-      if (!p._url) p._url = URL.createObjectURL(p.blob);
-      append(grid, el('div', { class: 'photo pending' },
-        el('img', { src: p._url, alt: 'Photo waiting to upload' }),
-        cap,
-        el('span', { class: 'pill pill-warn', text: p.error ? 'Waiting for signal' : 'Uploading…' })));
-    });
+    if (busy) append(grid, el('p', { class: 'muted', text: 'Uploading ' + busy + ' photo' + (busy > 1 ? 's' : '') + '…' }));
   }
 
-  function captionFor(p) {
-    var q = store.getJSON('qb:captions') || {};
-    return q[p.id] != null ? q[p.id] : (p.caption || '');
-  }
-
-  async function saveCaption(p, caption) {
-    var q = store.getJSON('qb:captions') || {};
-    q[p.id] = caption;
-    store.setJSON('qb:captions', q);
+  async function saveCaption(p, input) {
     try {
-      await api.photoCaption(p.id, caption);
-      p.caption = caption;
-      var q2 = store.getJSON('qb:captions') || {};
-      if (q2[p.id] === caption) { delete q2[p.id]; store.setJSON('qb:captions', q2); }
+      await api.photoCaption(p.id, input.value);
+      p.caption = input.value;
     } catch (e) {
-      if (e.code !== 'network') toast('Caption not saved: ' + errorText(e), 'error');
-    }
-  }
-
-  async function flushCaptions() {
-    var q = store.getJSON('qb:captions') || {};
-    for (var id in q) {
-      if (!Object.prototype.hasOwnProperty.call(q, id)) continue;
-      try {
-        await api.photoCaption(id, q[id]);
-        var q2 = store.getJSON('qb:captions') || {};
-        if (q2[id] === q[id]) { delete q2[id]; store.setJSON('qb:captions', q2); }
-      } catch (e) { if (e.code === 'network') return; }
+      input.value = p.caption || '';
+      toast('Caption not saved: ' + (e.code === 'network' ? 'no connection. Type it again when you have signal.' : errorText(e)), 'error');
     }
   }
 
@@ -735,71 +677,28 @@
     });
   }
 
+  // Photos go straight onto the job, so they need signal. One that does not upload is not
+  // kept anywhere: say so, and Hugo adds it again.
   async function addPhotos(ed, files) {
     var list = Array.prototype.slice.call(files || []);
+    var jobId = ed.job.id;
+    state.uploading[jobId] = (state.uploading[jobId] || 0) + list.length;
+    drawPhotos(ed);
     for (var i = 0; i < list.length; i++) {
       var f = list[i];
-      var blob = await compress(f);
-      if (['image/jpeg', 'image/png', 'image/webp'].indexOf(blob.type) === -1) { toast('That file type cannot be uploaded. Use a JPEG or PNG photo.', 'error'); continue; }
-      var rec = {
-        id: L.uuid(), job_id: ed.job.id, blob: blob,
-        file_name: (f.name || 'photo').replace(/\.[^.]+$/, '') + (blob.type === 'image/png' ? '.png' : blob.type === 'image/webp' ? '.webp' : '.jpg'),
-        caption: '', taken_at: f.lastModified ? new Date(f.lastModified).toISOString() : null,
-        attach_key: ed.locked ? null : ed.key, created_at: new Date().toISOString()
-      };
-      state.pending.push(rec);
-      await store.pendingPhotos.put(rec);
-    }
-    drawPhotos(ed);
-    processPhotoQueue();
-  }
-
-  var photoBusy = false;
-  async function processPhotoQueue() {
-    if (photoBusy || !state.session) return;
-    photoBusy = true;
-    try {
-      var queue = state.pending.slice();
-      for (var i = 0; i < queue.length; i++) {
-        var p = queue[i];
-        try {
-          var photo = await api.uploadPhoto(p.job_id, p.blob, p.file_name, p.caption, p.taken_at);
-          state.pending = state.pending.filter(function (x) { return x.id !== p.id; });
-          await store.pendingPhotos.del(p.id);
-          if (p._url) URL.revokeObjectURL(p._url);
-          var b = state.bundles[p.job_id];
-          if (b) {
-            b.photos = (b.photos || []).filter(function (x) { return x.id !== photo.id; }).concat([photo]);
-            store.setJSON(bundleKey(p.job_id), { bundle: b, at: new Date().toISOString() });
-          }
-          attachPhoto(p.attach_key, photo.id);
-        } catch (e) {
-          p.error = e.code || 'error';
-          if (e.code !== 'network' && e.status !== 401 && e.status !== 0) {
-            // A refusal that retrying will not fix: tell Hugo, keep the photo on the iPad.
-            toast('Photo not uploaded: ' + errorText(e), 'error');
-          }
-          break;
-        }
+      try {
+        var blob = await compress(f);
+        if (['image/jpeg', 'image/png', 'image/webp'].indexOf(blob.type) === -1) throw new api.ApiError(400, 'content_type_not_allowed', 'that file type cannot be uploaded. Use a JPEG or PNG photo.');
+        var name = (f.name || 'photo').replace(/\.[^.]+$/, '') + (blob.type === 'image/png' ? '.png' : blob.type === 'image/webp' ? '.webp' : '.jpg');
+        var photo = await api.uploadPhoto(jobId, blob, name, '', f.lastModified ? new Date(f.lastModified).toISOString() : null);
+        var b = state.bundles[jobId];
+        if (b) b.photos = (b.photos || []).filter(function (x) { return x.id !== photo.id; }).concat([photo]);
+        if (state.editor === ed && !ed.locked && ed.draft.photo_media_ids.indexOf(photo.id) === -1) { ed.draft.photo_media_ids.push(photo.id); changed(ed); }
+      } catch (e) {
+        toast('Photo not uploaded: ' + (e.code === 'network' ? 'no connection. Add it again when you have signal.' : errorText(e)), 'error');
       }
-    } finally {
-      photoBusy = false;
-      if (state.editor) drawPhotos(state.editor);
-      refreshTopbarBadge();
-    }
-  }
-
-  function attachPhoto(key, photoId) {
-    if (!key) return;
-    var ed = state.editor;
-    if (ed && ed.key === key) {
-      if (!ed.locked && ed.draft.photo_media_ids.indexOf(photoId) === -1) { ed.draft.photo_media_ids.push(photoId); changed(ed); }
-      return;
-    }
-    var d = store.getJSON(key);
-    if (d && d.draft && d.draft.photo_media_ids.indexOf(photoId) === -1) {
-      d.draft.photo_media_ids.push(photoId); d.dirty = true; d.updated_at = new Date().toISOString();
-      store.setJSON(key, d);
+      state.uploading[jobId]--;
+      if (state.editor && state.editor.job.id === jobId) drawPhotos(state.editor);
     }
   }
 
@@ -816,7 +715,7 @@
     if (ed.locked) return;
     drawTotals(ed);
     writeLocal(ed, true);
-    setStatus(ed, 'Saved on this iPad');
+    if (!ed.stale) setStatus(ed, 'Saved on this iPad');
     scheduleSave(ed, 1800);
   }
 
@@ -841,7 +740,7 @@
   // Saves the draft to Supabase. One request at a time; edits made while a save is in
   // flight are picked up by a follow-up save.
   async function cloudSave(ed) {
-    if (ed.locked || ed.conflict) return true;
+    if (ed.locked) return true;
     if (ed.stale) return false;
     if (ed.saving) { ed.again = true; return ed.savingPromise; }
     var fp = L.draftFingerprint(ed.draft);
@@ -850,8 +749,6 @@
     setStatus(ed, 'Saving…');
     ed.savingPromise = (async function () {
       try {
-        if (ed.kind === 'variation' && !ed.chainId && ed.firstSaveTried) await adoptOrphanChain(ed);
-        ed.firstSaveTried = true;
         var payload = L.savePayload(ed.job, ed.kind, ed.chainId, ed.baseVersionId, ed.draft);
         var sentFp = L.draftFingerprint(ed.draft);
         var r = await api.save(payload);
@@ -865,19 +762,20 @@
         writeLocal(ed, true);
         setStatus(ed, savedText(ed), 'ok');
         clearTimeout(ed.retryTimer);
+        staleKey = null;
         if (ed.dom.versionBar) drawVersionBar(state.bundles[ed.job.id], ed);
         return true;
       } catch (e) {
         if (e.code === 'stale_version' || e.code === 'version_frozen' || e.code === 'version_issued') {
-          await handleStale(ed);
+          handleStale(ed);
         } else if (e.code === 'network' || e.status === 0 || e.status >= 500) {
-          setStatus(ed, 'No signal: saved on this iPad, will retry', 'warn');
+          setStatus(ed, 'Not saved to the office: no connection. Your work is kept on this iPad and will save when signal is back.', 'warn');
           clearTimeout(ed.retryTimer);
           if (!ed.closed) ed.retryTimer = setTimeout(function () { cloudSave(ed); }, 15000);
         } else if (e.status === 401 || e.code === 'not_signed_in') {
-          setStatus(ed, 'Signed out: saved on this iPad', 'warn');
+          setStatus(ed, 'Not saved to the office: signed out. Your work is kept on this iPad.', 'warn');
         } else {
-          setStatus(ed, 'Not saved: ' + errorText(e), 'error');
+          setStatus(ed, 'Not saved to the office: ' + errorText(e) + ' Your work is kept on this iPad.', 'error');
         }
         return false;
       } finally {
@@ -893,35 +791,12 @@
     return 'Saved' + (v ? ' as version ' + v.version : '') + ' ' + new Date().toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' });
   }
 
-  // A brand new variation has no chain until its first save. If that first save's reply was
-  // lost, look for the chain it made before trying again, so a retry never makes a second one.
-  async function adoptOrphanChain(ed) {
-    try {
-      var b = await loadBundle(ed.job.id, true);
-      var me = state.session && state.session.user && state.session.user.id;
-      var fresh = (b.variations || []).filter(function (c) {
-        if (ed.knownChains.indexOf(c.chain_id) !== -1) return false;
-        var lv = L.latestVersion(c);
-        return lv && lv.status === 'draft' && (!me || !lv.created_by || lv.created_by === me);
-      });
-      if (fresh.length === 1) {
-        var lv = L.latestVersion(fresh[0]);
-        adoptNewChain(ed, fresh[0].chain_id);
-        ed.chainId = fresh[0].chain_id;
-        ed.baseVersionId = lv.id;
-        ed.latest = lv;
-      }
-    } catch (e) { /* offline: the save below fails the same way and retries later */ }
-  }
-
   // Move the local draft from its new-xxx key to the real chain id and fix the address bar.
   function adoptNewChain(ed, chainId) {
     var oldKey = ed.key;
     ed.localRef = chainId;
     ed.key = L.draftKey(ed.job.id, 'variation', chainId);
     store.remove(oldKey);
-    ed.knownChains.push(chainId);
-    state.pending.forEach(function (p) { if (p.attach_key === oldKey) { p.attach_key = ed.key; store.pendingPhotos.put(p); } });
     var h = '#/job/' + ed.job.id + '/var/' + chainId;
     if (location.hash !== h) { ignoreHash = h; history.replaceState(null, '', h); }
   }
@@ -939,18 +814,18 @@
     }
     var i = chain.versions.findIndex(function (x) { return x.id === v.id; });
     if (i === -1) chain.versions.push(v); else chain.versions[i] = v;
-    store.setJSON(bundleKey(ed.job.id), { bundle: b, at: new Date().toISOString() });
   }
 
-  async function handleStale(ed) {
+  // The office has a newer copy than this screen was opened on (a reply lost on a weak
+  // signal, or a save from another device). The edits are in the draft backup, so reload the
+  // job once and openEditor puts them on top. If that save is refused as well, stop and say so.
+  var staleKey = null;
+  function handleStale(ed) {
     ed.stale = true;
     clearTimeout(ed.timer); clearTimeout(ed.retryTimer);
-    setStatus(ed, 'Changed elsewhere', 'warn');
-    var local = store.getJSON(ed.key);
-    if (local) { local.dirty = true; local.base_version_id = 'stale:' + (ed.baseVersionId || ''); store.setJSON(ed.key, local); }
-    // An editor Hugo already left: keep the edits flagged for next time, no pop-up.
     if (ed.closed) return;
-    await modal({ title: 'This quote changed on another device', body: 'Someone saved or issued it after you opened it. Your edits are kept on this iPad. The page will reload so you can pick which version to keep.' });
+    if (staleKey === ed.key) { setStatus(ed, 'Not saved to the office: this quote keeps changing somewhere else. Your work is kept on this iPad.', 'error'); return; }
+    staleKey = ed.key;
     rerender();
   }
 
@@ -964,7 +839,7 @@
     clearTimeout(ed.timer);
     clearTimeout(ed.retryTimer);
     if (ed.saving) return ed.savingPromise;
-    if (!ed.locked && !ed.conflict && !ed.stale && L.draftFingerprint(ed.draft) !== ed.syncedFp) return cloudSave(ed);
+    if (!ed.locked && !ed.stale && L.draftFingerprint(ed.draft) !== ed.syncedFp) return cloudSave(ed);
     return Promise.resolve();
   }
 
@@ -987,7 +862,7 @@
     var byId = {};
     (b.photos || []).forEach(function (p) { byId[p.id] = p; });
     return (ed.draft.photo_media_ids || []).map(function (id) { return byId[id]; }).filter(Boolean)
-      .map(function (p) { return { url: p.url, caption: captionFor(p) }; });
+      .map(function (p) { return { url: p.url, caption: p.caption || '' }; });
   }
 
   function pdfOpts(b, ed, quoteNumber) {
@@ -1187,7 +1062,7 @@
         el('section', { class: 'card client' }, el('h2', { text: 'Quoted: what we charge' }),
           el('div', { class: 'table-scroll' }, el('table', { class: 'hist' }, el('thead', null, el('tr', null, el('th', { text: 'Description' }), el('th', { class: 'r', text: 'Qty' }), el('th', { class: 'r', text: 'Unit price' }), el('th', { text: '' }), el('th', { class: 'r', text: 'Total' }))), el('tbody', null, chargeRows))))),
       photos.length ? el('section', { class: 'card' }, el('h2', { text: 'Photos on this version' }),
-        el('div', { class: 'photo-grid' }, photos.map(function (p) { return el('div', { class: 'photo on' }, el('img', { src: p.url, alt: p.caption || 'Site photo', loading: 'lazy' }), el('p', { class: 'small', text: captionFor(p) })); }))) : null);
+        el('div', { class: 'photo-grid' }, photos.map(function (p) { return el('div', { class: 'photo on' }, el('img', { src: p.url, alt: p.caption || 'Site photo', loading: 'lazy' }), el('p', { class: 'small', text: p.caption || '' })); }))) : null);
   }
 
   // ---------- Router ----------
@@ -1213,13 +1088,11 @@
   window.addEventListener('online', function () {
     state.online = true; refreshTopbarBadge();
     if (state.editor) cloudSave(state.editor);
-    processPhotoQueue(); flushCaptions();
   });
   window.addEventListener('offline', function () { state.online = false; refreshTopbarBadge(); });
   document.addEventListener('visibilitychange', function () {
     var ed = state.editor;
-    if (document.visibilityState === 'hidden' && ed) { writeLocal(ed, true); if (!ed.locked && !ed.conflict) cloudSave(ed); }
-    if (document.visibilityState === 'visible') { processPhotoQueue(); flushCaptions(); }
+    if (document.visibilityState === 'hidden' && ed) { writeLocal(ed, true); if (!ed.locked) cloudSave(ed); }
   });
   window.addEventListener('pagehide', function () { var ed = state.editor; if (ed && !ed.locked) writeLocal(ed, true); });
 
@@ -1233,14 +1106,11 @@
     append(document.body, el('datalist', { id: 'qb-units' }, L.UNITS.map(function (u) { return el('option', { value: u }); })));
     append(document.body, el('datalist', { id: 'qb-suppliers' }));
     try { state.session = await api.session(); } catch (e) { state.session = null; }
-    state.pending = (await store.pendingPhotos.all()) || [];
     route();
-    if (state.session) { processPhotoQueue(); flushCaptions(); }
     api.onAuthChange(function (event, session) {
       if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') state.session = session;
-      if (event === 'SIGNED_IN') { processPhotoQueue(); flushCaptions(); if (state.editor) cloudSave(state.editor); }
+      if (event === 'SIGNED_IN' && state.editor) cloudSave(state.editor);
     });
-    setInterval(function () { if (state.pending.length) processPhotoQueue(); }, 30000);
   }
 
   window.QBApp = { state: state };

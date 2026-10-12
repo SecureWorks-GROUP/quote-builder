@@ -13,7 +13,7 @@ Backend contract: secureworks-backend `docs/quote-builder-contract.md` (ops-api 
    - **What it costs us** (top, internal only): description, qty, unit, unit cost, supplier or trade. Never printed on the quote.
    - **Site photos**: Take photo or choose from the library, add a caption. Ticked photos go on the client quote.
    - **What we charge the client** (bottom): quote title, scope of works, charge lines with GST. "Fill from costs + markup" gives a starting point.
-5. Everything saves by itself, on the iPad first and then to the office. No signal is fine: it uploads when signal is back.
+5. Everything saves to the office by itself as you type. If a save fails (no signal), the draft is kept on the iPad and the screen says so; it saves when signal is back. Opening jobs and adding photos need signal.
 6. **Issue client quote** freezes that version, saves the PDF on the job and moves the Repairs board card to Quoted. Nothing is emailed or texted.
 7. Changes after issuing: **Start a revision** (becomes version 2). Extra work: **Variations** tab, **New variation**, then record approved or rejected.
 8. **History** shows every version: what was allowed (cost) against what was quoted.

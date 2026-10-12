@@ -19,6 +19,7 @@ function seed() {
   const job = (o) => Object.assign({ id: uuid(), status: 'processing', client_phone: '', client_email: '', created_at: now(), category: null, builder_purchase_order: null }, o);
   return {
     offline: false,
+    loseReply: {},    // action -> true: the next call is carried out, then its reply is dropped
     calls: [],
     files: {},
     jobs: [
@@ -271,6 +272,7 @@ async function install(page, db) {
       }
       const body = req.postData() ? JSON.parse(req.postData()) : {};
       const r = handle(db, action, url.searchParams, body);
+      if (db.loseReply[action]) { delete db.loseReply[action]; return route.abort('internetdisconnected'); }
       return route.fulfill({ status: r.status, headers: cors, contentType: 'application/json', body: JSON.stringify(r.body) });
     }
     return route.fulfill({ status: 404, headers: cors });

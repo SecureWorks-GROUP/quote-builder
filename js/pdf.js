@@ -333,12 +333,10 @@
     doc.text('Includes GST of ' + L.money(t.charge_gst), bx + blockW - 6, y + 22, { align: 'right' });
     y += blockH + 6;
 
-    var co = window.QB_CONFIG.company;
     var terms = [
       'This quote is valid for 30 days from the date above.',
       'It is based on the scope of works described here. Additional works, site conditions not visible at the time of quoting, or requested changes will be quoted separately as a variation.',
-      'All prices are in Australian dollars. GST is shown separately.',
-      co.legalName + ' (ABN ' + co.abn + ') is licensed and insured for building work in Western Australia.'
+      'All prices are in Australian dollars. GST is shown separately.'
     ];
     doc.setFontSize(7.5);
     var termLines = [];

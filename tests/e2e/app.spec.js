@@ -99,6 +99,9 @@ test('scope a repair job: costs on top, client charge below, autosave, issue a P
   expect(pdf).toContain('$815.00');
   expect(pdf).toContain('ML Builders');
   expect(pdf).toContain('Prepared by Hugo Tester');
+  expect(pdf).toContain('This quote is valid for 30 days');
+  // No licence or insurance claim prints until the owner supplies the wording.
+  expect(pdf).not.toMatch(/licen[cs]ed|insured/i);
   // Internal costs never reach the client PDF.
   for (const secret of ['Remove and dispose damaged fascia', 'Carpenter labour', 'Bunnings', 'Dave the chippy', '$485.00']) expect(pdf).not.toContain(secret);
 
@@ -119,40 +122,76 @@ test('scope a repair job: costs on top, client charge below, autosave, issue a P
   await expect(page.locator('.margin-strip')).toContainText('$485.00');
 });
 
-test('a dropped connection keeps the draft on the iPad and it uploads when signal is back', async ({ page }) => {
+test('a failed save keeps the draft on the iPad, says so, and saves when signal is back', async ({ page }) => {
   await signIn(page);
   await page.click('.job-card:has-text("SWR-26103")');
   await expect(page.locator('.line.cost')).toHaveCount(1);
   db.offline = true;
   await typeLine(page.locator('.line.cost').nth(0), { description: 'Replace 3 roof sheets', qty: 3, unit: 'sheet', price: 80, supplier: 'Stratco' });
-  await expect(page.locator('.save-state')).toContainText('No signal', { timeout: 10000 });
+  await expect(page.locator('.save-state')).toContainText('Not saved to the office: no connection. Your work is kept on this iPad', { timeout: 10000 });
   expect(db.versions).toHaveLength(0);
 
-  // iPad reloads the page while still offline: the work is still there.
+  // No signal: the job cannot be opened, and the screen says why.
   await page.reload();
-  await expect(page.locator('.line.cost textarea.desc').first()).toHaveValue('Replace 3 roof sheets');
-  await expect(page.locator('.banner-warn')).toContainText('Offline');
+  await expect(page.locator('.banner-error')).toContainText('No connection');
+  await expect(page.locator('.editor')).toHaveCount(0);
 
   db.offline = false;
-  await page.reload();
+  await page.click('button:has-text("Try again")');
   await expect(page.locator('.line.cost textarea.desc').first()).toHaveValue('Replace 3 roof sheets');
   await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
   expect(db.versions[0].cost_lines[0]).toMatchObject({ description: 'Replace 3 roof sheets', line_total_ex_gst: 240 });
 });
 
-test('stale save from another device asks which version to keep and never overwrites silently', async ({ page }) => {
+test('a save whose reply is lost: the iPad edits go on top of the saved copy, one version, nothing lost', async ({ page }) => {
   await signIn(page);
   await page.click('.job-card:has-text("SWR-26103")');
+  db.loseReply.quote_builder_save = true;
   await typeLine(page.locator('.line.cost').nth(0), { description: 'Gutter repair', qty: 1, unit: 'item', price: 120 });
-  await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
-  db.failNext = { quote_builder_save: { status: 409, code: 'stale_version' } };
+  await expect(page.locator('.save-state')).toContainText('Not saved to the office', { timeout: 10000 });
+  expect(db.versions).toHaveLength(1);
   await page.locator('.line.cost input.num').nth(1).fill('150');
-  await expect(page.locator('.modal h2')).toHaveText('This quote changed on another device', { timeout: 10000 });
-  await page.click('.modal button:has-text("OK")');
-  await expect(page.locator('.conflict')).toBeVisible();
-  await page.click('button:has-text("Keep my iPad edits")');
+  await expect(page.locator('.editor .banner-warn')).toContainText('have been put on top of the saved quote', { timeout: 10000 });
   await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
+  await expect(page.locator('.line.cost textarea.desc').first()).toHaveValue('Gutter repair');
+  expect(db.versions).toHaveLength(1);
   expect(db.versions[0].cost_lines[0].unit_cost_ex_gst).toBe(150);
+});
+
+test('the list says when it cannot load and loads on Try again', async ({ page }) => {
+  await signIn(page);
+  db.offline = true;
+  await page.click('.chip:has-text("Approved and on")');
+  await expect(page.locator('.job-list .banner-warn')).toContainText('No connection');
+  await expect(page.locator('.job-card')).toHaveCount(0);
+  await expect(page.locator('.job-list .empty')).toHaveCount(0);
+  db.offline = false;
+  await page.click('button:has-text("Try again")');
+  await expect(page.locator('.job-card .job-no')).toHaveText(['SWR-26104']);
+});
+
+test('a photo or caption that cannot upload is reported, not left waiting', async ({ page }) => {
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26102")');
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAABxZ0isAAAAGElEQVR4nGP4z8DwHw0zDCQXGgEA9fNfoexZgD8AAAAASUVORK5CYII=', 'base64');
+  const file = { name: 'IMG_0042.png', mimeType: 'image/png', buffer: png };
+  await expect(page.locator('.editor')).toBeVisible();
+  db.offline = true;
+  await page.locator('input[type=file]:not([capture])').setInputFiles(file);
+  await expect(page.locator('.toast.error')).toContainText('Photo not uploaded: no connection. Add it again when you have signal.');
+  await expect(page.locator('.photo-grid')).toHaveText('No photos yet.');
+
+  db.offline = false;
+  await page.locator('input[type=file]:not([capture])').setInputFiles(file);
+  await expect(page.locator('.photo')).toHaveCount(1, { timeout: 10000 });
+  expect(db.photos).toHaveLength(1);
+
+  db.offline = true;
+  await page.fill('.photo .caption', 'Rear eave');
+  await page.locator('.photo .caption').blur();
+  await expect(page.locator('.toast.error').last()).toContainText('Caption not saved: no connection');
+  await expect(page.locator('.photo .caption')).toHaveValue('');
+  expect(db.photos[0].caption).toBe('');
 });
 
 test('site photo from the iPad uploads, gets a caption and goes on the quote', async ({ page }) => {
@@ -160,7 +199,7 @@ test('site photo from the iPad uploads, gets a caption and goes on the quote', a
   await page.click('.job-card:has-text("SWR-26102")');
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAABxZ0isAAAAGElEQVR4nGP4z8DwHw0zDCQXGgEA9fNfoexZgD8AAAAASUVORK5CYII=', 'base64');
   await page.locator('input[type=file]:not([capture])').setInputFiles({ name: 'IMG_0042.png', mimeType: 'image/png', buffer: png });
-  await expect(page.locator('.photo:not(.pending)')).toHaveCount(1, { timeout: 10000 });
+  await expect(page.locator('.photo')).toHaveCount(1, { timeout: 10000 });
   expect(calls('quote_builder_photo_register')).toHaveLength(1);
   await expect(page.locator('.photo input[type=checkbox]')).toBeChecked();
   await page.fill('.photo .caption', 'Water damage, rear eave');
@@ -178,20 +217,41 @@ test('new private quote makes a miscellaneous job once, even when the reply is l
   await page.fill('#np-client_phone', '0400 000 000');
   await page.fill('#np-site_address', '5 Sample Rd');
   await page.fill('#np-site_suburb', 'Bayswater');
-  db.offline = true;
+  db.loseReply.quote_builder_create_private_job = true;
   await page.click('button:has-text("Create job and start quote")');
   await expect(page.locator('.form-error')).toContainText('No connection');
-  db.offline = false;
+  expect(db.jobs.filter((j) => j.type === 'miscellaneous')).toHaveLength(1);
   await page.click('button:has-text("Create job and start quote")');
   await expect(page.locator('.job-head')).toContainText('SWM-26001');
   await expect(page.locator('.job-head')).toContainText('Jane Citizen');
   const reqIds = calls('quote_builder_create_private_job').map((c) => c.body.request_id);
+  expect(reqIds).toHaveLength(2);
   expect(new Set(reqIds).size).toBe(1);
   expect(db.jobs.filter((j) => j.type === 'miscellaneous')).toHaveLength(1);
 
   await page.click('a:has-text("Jobs")');
   await page.click('.seg-btn:has-text("Private quotes")');
   await expect(page.locator('.job-card .job-no')).toHaveText(['SWM-26001']);
+});
+
+test('new private quote: details changed after a lost reply make a new job, not the first client\'s', async ({ page }) => {
+  await signIn(page);
+  await page.click('a:has-text("+ New private quote")');
+  await page.fill('#np-client_name', 'Jane Citizen');
+  await page.fill('#np-site_address', '5 Sample Rd');
+  db.loseReply.quote_builder_create_private_job = true;
+  await page.click('button:has-text("Create job and start quote")');
+  await expect(page.locator('.form-error')).toContainText('No connection');
+
+  await page.fill('#np-client_name', 'Bob Other');
+  await page.fill('#np-site_address', '9 Different St');
+  await page.click('button:has-text("Create job and start quote")');
+  await expect(page.locator('.job-head')).toContainText('SWM-26002');
+  await expect(page.locator('.job-head')).toContainText('Bob Other');
+  await expect(page.locator('.job-head')).toContainText('9 Different St');
+  const reqIds = calls('quote_builder_create_private_job').map((c) => c.body.request_id);
+  expect(new Set(reqIds).size).toBe(2);
+  expect(db.jobs.filter((j) => j.type === 'miscellaneous').map((j) => j.client_name)).toEqual(['Jane Citizen', 'Bob Other']);
 });
 
 test('variation: same two-part layout, issue moves the card to Variation, approval to Approved', async ({ page }) => {
