@@ -272,10 +272,6 @@ async function install(page, db) {
       db.calls.push({ action, method: req.method(), auth, apikey, body: req.postData() ? JSON.parse(req.postData()) : null });
       if (Object.keys(req.headers()).some((h) => !OPS_API_ALLOWED_HEADERS.includes(h) && !SET_BY_BROWSER.test(h))) return route.abort('failed');
       if (auth !== 'Bearer test-access-token') return route.fulfill({ status: 401, headers: cors, contentType: 'application/json', body: JSON.stringify({ error: 'unauthorized', code: 'unauthorized' }) });
-      if (db.failNext && db.failNext[action]) {
-        const f = db.failNext[action]; delete db.failNext[action];
-        return route.fulfill({ status: f.status, headers: cors, contentType: 'application/json', body: JSON.stringify({ error: f.code, code: f.code }) });
-      }
       const body = req.postData() ? JSON.parse(req.postData()) : {};
       const r = handle(db, action, url.searchParams, body);
       if (db.loseReply[action]) { delete db.loseReply[action]; return route.abort('internetdisconnected'); }

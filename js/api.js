@@ -4,8 +4,9 @@
 (function () {
   'use strict';
   var cfg = window.QB_CONFIG;
+  var AUTH_KEY = 'qb-auth';
   var sb = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
-    auth: { persistSession: true, autoRefreshToken: true, storageKey: 'qb-auth' }
+    auth: { persistSession: true, autoRefreshToken: true, storageKey: AUTH_KEY }
   });
 
   function ApiError(status, code, message) {
@@ -90,7 +91,12 @@
       if (r.error) throw r.error;
       return r.data.session;
     },
-    async signOut() { await sb.auth.signOut(); },
+    // supabase-js tells the server first and, when that call fails (no signal), leaves the
+    // login stored on the device. Signing out here always removes it from this device.
+    async signOut() {
+      try { await sb.auth.signOut(); } catch (e) { /* removed below */ }
+      try { localStorage.removeItem(AUTH_KEY); } catch (e) { /* storage unavailable: nothing stored */ }
+    },
     onAuthChange(fn) { sb.auth.onAuthStateChange(function (event, session) { fn(event, session); }); },
 
     listJobs(lane, stages) {

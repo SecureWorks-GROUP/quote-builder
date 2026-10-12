@@ -56,9 +56,11 @@
     return (neg ? '-$' : '$') + parts.join('.');
   }
 
+  // Quantity as typed, to 3 decimals with no trailing zeros, so qty x price reads true on the quote.
   function qtyText(q) {
-    var x = round2(q);
-    return String(x);
+    var x = Number(q);
+    if (!isFinite(x)) return '0';
+    return String(Math.round((x + Number.EPSILON) * 1000) / 1000);
   }
 
   function randomHex(len) {

@@ -122,6 +122,43 @@ test('scope a repair job: costs on top, client charge below, autosave, issue a P
   await expect(page.locator('.margin-strip')).toContainText('$485.00');
 });
 
+test('signing out with no signal still removes the login from this iPad', async ({ page }) => {
+  await signIn(page);
+  db.offline = true;
+  await page.click('button:has-text("Sign out")');
+  await page.click('.modal button:has-text("Sign out")');
+  await expect(page.locator('#email')).toBeVisible();
+
+  db.offline = false;
+  await page.reload();
+  await expect(page.locator('#email')).toBeVisible();
+  await expect(page.locator('.job-list')).toHaveCount(0);
+  expect(calls('quote_builder_list_jobs')).toHaveLength(1);
+});
+
+test('a quantity with 3 decimals prints as typed, so the row multiplies out on the PDF and in History', async ({ page }) => {
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26103")');
+  await typeLine(page.locator('.line.cost').nth(0), { description: 'Fascia board', qty: 2.375, unit: 'm', price: 4 });
+  await typeLine(page.locator('.line.charge').nth(0), { description: 'Replace fascia', qty: 2.375, unit: 'm', price: 10 });
+  await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
+  await page.click('button:has-text("Issue client quote")');
+  await page.click('.modal button:has-text("Issue")');
+  await expect(page.locator('.modal h2')).toHaveText('Issued SWR-26103-Q1', { timeout: 20000 });
+  await page.click('.modal button:has-text("OK")');
+
+  const pdf = db.files[Object.keys(db.files).find((k) => k.startsWith('job-pdfs/'))].body.toString('latin1');
+  expect(pdf).toContain('(2.375)');
+  expect(pdf).not.toContain('(2.38)');
+  expect(pdf).toContain('$23.75');
+
+  await page.click('.tab:has-text("History")');
+  await page.click('table.hist a:has-text("Scope v1")');
+  await expect(page.locator('.compare .client')).toContainText('2.375 m');
+  await expect(page.locator('.compare .client')).toContainText('$23.75');
+  await expect(page.locator('.compare .internal')).toContainText('2.375 m');
+});
+
 test('a failed save keeps the draft on the iPad, says so, and saves when signal is back', async ({ page }) => {
   await signIn(page);
   await page.click('.job-card:has-text("SWR-26103")');

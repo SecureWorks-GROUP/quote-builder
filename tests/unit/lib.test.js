@@ -33,6 +33,15 @@ test('money rounds to cents and formats with commas', () => {
   assert.equal(L.round2(2.675), 2.68);
 });
 
+test('qtyText keeps up to 3 decimals and drops trailing zeros', () => {
+  assert.equal(L.qtyText(2.375), '2.375');
+  assert.equal(L.qtyText('12.50'), '12.5');
+  assert.equal(L.qtyText(4), '4');
+  assert.equal(L.qtyText(2.3756), '2.376');
+  assert.equal(L.qtyText(0.1 + 0.2), '0.3');
+  assert.equal(L.qtyText('abc'), '0');
+});
+
 test('num reads typed values and refuses negatives and junk', () => {
   assert.equal(L.num('1,250.50'), 1250.5);
   assert.equal(L.num('$40'), 40);

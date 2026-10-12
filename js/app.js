@@ -1149,6 +1149,5 @@
     });
   }
 
-  window.QBApp = { state: state };
   start();
 })();
