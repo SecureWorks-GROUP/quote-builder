@@ -13,6 +13,11 @@ const r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const uuid = () => crypto.randomUUID();
 const now = () => new Date().toISOString();
 
+// ops-api answers the browser's preflight with these request headers and no others
+// (ops-api/index.ts), so a call carrying any other header never leaves a real browser.
+const OPS_API_ALLOWED_HEADERS = ['content-type', 'authorization', 'x-api-key'];
+const SET_BY_BROWSER = /^(accept|accept-encoding|accept-language|user-agent|origin|referer|content-length|host|connection|priority|sec-.+)$/;
+
 const USER = { id: '11111111-1111-4111-8111-111111111111', email: 'hugo@secureworkswa.com.au', user_metadata: { full_name: 'Hugo Tester' } };
 
 function seed() {
@@ -265,6 +270,7 @@ async function install(page, db) {
       const auth = req.headers()['authorization'];
       const apikey = req.headers()['apikey'];
       db.calls.push({ action, method: req.method(), auth, apikey, body: req.postData() ? JSON.parse(req.postData()) : null });
+      if (Object.keys(req.headers()).some((h) => !OPS_API_ALLOWED_HEADERS.includes(h) && !SET_BY_BROWSER.test(h))) return route.abort('failed');
       if (auth !== 'Bearer test-access-token') return route.fulfill({ status: 401, headers: cors, contentType: 'application/json', body: JSON.stringify({ error: 'unauthorized', code: 'unauthorized' }) });
       if (db.failNext && db.failNext[action]) {
         const f = db.failNext[action]; delete db.failNext[action];

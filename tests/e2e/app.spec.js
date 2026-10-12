@@ -41,10 +41,10 @@ test('wrong password shows a plain message; right one lands on the repair list g
   await page.click('button[type=submit]');
   await expect(page.locator('.group-title')).toHaveText([/Builderwest/, /ML Builders/]);
   await expect(page.locator('.job-card')).toHaveCount(3);
-  // Every ops-api call carries the staff session and the public anon key, nothing else.
+  // Every ops-api call carries the staff session and no apikey header: ops-api's CORS does not allow one.
   const c = calls('quote_builder_list_jobs')[0];
   expect(c.auth).toBe('Bearer test-access-token');
-  expect(c.apikey).toMatch(/^eyJ/);
+  expect(c.apikey).toBeUndefined();
   await page.fill('.search', 'lee inglewood');
   await expect(page.locator('.job-card')).toHaveCount(1);
   await expect(page.locator('.job-card .job-no')).toHaveText('SWR-26103');
@@ -476,6 +476,39 @@ test('a job that loads after Hugo has opened another one does not take over the 
   await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
   expect(db.versions).toHaveLength(1);
   expect(db.versions[0].job_id).toBe(db.jobs[2].id);
+});
+
+test('a late load of the same job does not replace the open editor\'s job data: a photo added after still prints on the issued PDF', async ({ page }) => {
+  await signIn(page);
+  const jobId = db.jobs[1].id;
+  let seen = 0, release;
+  const held = new Promise((r) => { release = r; });
+  await page.route((url) => url.searchParams.get('action') === 'quote_builder_get_job' && url.searchParams.get('job_id') === jobId,
+    async (route) => { if (route.request().method() === 'GET' && seen++ === 0) await held; await route.fallback(); });
+
+  await page.click('.job-card:has-text("SWR-26102")');
+  await expect(page.getByText('Loading job…')).toBeVisible();
+  await page.click('a:has-text("Jobs")');
+  await page.click('.job-card:has-text("SWR-26102")');
+  await expect(page.locator('.editor')).toBeVisible();
+
+  const landed = page.waitForResponse((r) => r.request().method() === 'GET' && r.url().includes('job_id=' + jobId));
+  release();
+  await landed;
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 100)));
+
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAABxZ0isAAAAGElEQVR4nGP4z8DwHw0zDCQXGgEA9fNfoexZgD8AAAAASUVORK5CYII=', 'base64');
+  await page.locator('input[type=file]:not([capture])').setInputFiles({ name: 'IMG_0042.png', mimeType: 'image/png', buffer: png });
+  await expect(page.locator('.photo input[type=checkbox]')).toBeChecked({ timeout: 10000 });
+  await typeLine(page.locator('.line.charge').nth(0), { description: 'Replace fascia', qty: 1, unit: 'item', price: 650 });
+  await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
+  await page.click('button:has-text("Issue client quote")');
+  await page.click('.modal button:has-text("Issue")');
+  await expect(page.locator('.modal h2')).toHaveText('Issued SWR-26102-Q1', { timeout: 20000 });
+
+  expect(db.versions[0].photo_media_ids).toEqual([db.photos[0].id]);
+  const pdf = db.files[Object.keys(db.files).find((k) => k.startsWith('job-pdfs/'))].body.toString('latin1');
+  expect(pdf).toContain('Site photos');
 });
 
 test('a line with a supplier but no description is flagged on screen and blocks issuing', async ({ page }) => {

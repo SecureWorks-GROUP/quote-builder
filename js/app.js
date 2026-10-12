@@ -288,12 +288,6 @@
   }
 
   // ---------- Job bundle ----------
-  async function loadBundle(jobId) {
-    var b = await api.getJob(jobId);
-    state.bundles[jobId] = b;
-    return b;
-  }
-
   function jobHeader(job, active) {
     var info = [];
     if (job.type === 'miscellaneous') {
@@ -327,7 +321,7 @@
     var main = el('main', { class: 'page' }, el('p', { class: 'muted', text: 'Loading job…' }));
     append(app, main);
     var b;
-    try { b = await loadBundle(jobId); }
+    try { b = await api.getJob(jobId); }
     catch (e) {
       if (seq !== routeSeq) return;
       clear(main);
@@ -336,6 +330,7 @@
       return;
     }
     if (seq !== routeSeq) return;
+    state.bundles[jobId] = b;
     clear(main);
     append(main, jobHeader(b.job, active));
     fn(main, b);

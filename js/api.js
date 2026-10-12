@@ -41,7 +41,7 @@
     }
     var init = {
       method: opts.body ? 'POST' : 'GET',
-      headers: { Authorization: 'Bearer ' + token, apikey: cfg.supabaseAnonKey }
+      headers: { Authorization: 'Bearer ' + token }
     };
     if (opts.body) {
       init.headers['Content-Type'] = 'application/json';
