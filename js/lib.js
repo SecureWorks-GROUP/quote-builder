@@ -121,7 +121,7 @@
     return num(l.unit_cost_ex_gst) > 0 || num(l.unit_price_ex_gst) > 0 || !!String(l.supplier_or_trade || '').trim();
   }
 
-  // Lines with numbers but no description: worth warning about before issuing.
+  // Lines with a price or supplier but no description: flagged on screen and block issuing.
   function unnamedLines(lines) {
     return (lines || []).filter(function (l) { return isBlankLine(l) && hasAmounts(l); }).length;
   }
@@ -289,7 +289,7 @@
     round2: round2, num: num, money: money, qtyText: qtyText, uuid: uuid, newLineId: newLineId,
     blankCostLine: blankCostLine, blankChargeLine: blankChargeLine,
     costLineTotal: costLineTotal, chargeLineTotal: chargeLineTotal, chargeLineGst: chargeLineGst, totals: totals,
-    isBlankLine: isBlankLine, unnamedLines: unnamedLines, cleanCostLines: cleanCostLines, cleanChargeLines: cleanChargeLines, chargeFromCosts: chargeFromCosts,
+    isBlankLine: isBlankLine, hasAmounts: hasAmounts, unnamedLines: unnamedLines, cleanCostLines: cleanCostLines, cleanChargeLines: cleanChargeLines, chargeFromCosts: chargeFromCosts,
     draftFromVersion: draftFromVersion, emptyDraft: emptyDraft, savePayload: savePayload, draftFingerprint: draftFingerprint,
     latestVersion: latestVersion, filterJobs: filterJobs, groupByBuilder: groupByBuilder,
     stageLabel: stageLabel, categoryLabel: categoryLabel, draftKey: draftKey,

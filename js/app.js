@@ -321,6 +321,7 @@
   }
 
   async function withBundle(jobId, active, fn) {
+    var seq = routeSeq;
     clear(app);
     append(app, topbar({ href: '#/', label: 'Jobs' }));
     var main = el('main', { class: 'page' }, el('p', { class: 'muted', text: 'Loading job…' }));
@@ -328,11 +329,13 @@
     var b;
     try { b = await loadBundle(jobId); }
     catch (e) {
+      if (seq !== routeSeq) return;
       clear(main);
       append(main, el('p', { class: 'banner banner-error', text: e.status === 404 ? 'That job was not found.' : errorText(e) }),
         el('button', { class: 'btn', text: 'Try again', onclick: route }));
       return;
     }
+    if (seq !== routeSeq) return;
     clear(main);
     append(main, jobHeader(b.job, active));
     fn(main, b);
@@ -533,8 +536,8 @@
     clear(body);
     ed.draft.cost_lines.forEach(function (l, idx) {
       var total = el('span', { class: 'line-total', text: L.money(L.costLineTotal(l)) });
-      function upd(field, v) { l[field] = v; total.textContent = L.money(L.costLineTotal(l)); row.classList.toggle('unnamed', L.isBlankLine(l) && hasNums(l)); changed(ed); }
-      var row = el('div', { class: 'line cost' + (L.isBlankLine(l) && hasNums(l) ? ' unnamed' : '') },
+      function upd(field, v) { l[field] = v; total.textContent = L.money(L.costLineTotal(l)); row.classList.toggle('unnamed', L.isBlankLine(l) && L.hasAmounts(l)); changed(ed); }
+      var row = el('div', { class: 'line cost' + (L.isBlankLine(l) && L.hasAmounts(l) ? ' unnamed' : '') },
         descInput(l.description, function (v) { upd('description', v); }, ed.locked, 'What, e.g. Remove and dispose damaged fascia'),
         lbl('Qty', numInput(l.qty, function (v) { upd('qty', v); }, ed.locked)),
         lbl('Unit', unitInput(l.unit, function (v) { upd('unit', v); }, ed.locked)),
@@ -547,8 +550,6 @@
     refreshSupplierList(ed);
     if (focusLast) { var d = body.querySelectorAll('.desc'); if (d.length) d[d.length - 1].focus(); }
   }
-
-  function hasNums(l) { return L.num(l.unit_cost_ex_gst) > 0 || L.num(l.unit_price_ex_gst) > 0; }
 
   function lbl(text, input) { return el('label', { class: 'cell' }, el('span', { class: 'cell-label', text: text }), input); }
 
@@ -568,9 +569,9 @@
     clear(body);
     ed.draft.charge_lines.forEach(function (l, idx) {
       var total = el('span', { class: 'line-total', text: L.money(L.chargeLineTotal(l)) });
-      function upd(field, v) { l[field] = v; total.textContent = L.money(L.chargeLineTotal(l)); row.classList.toggle('unnamed', L.isBlankLine(l) && hasNums(l)); changed(ed); }
+      function upd(field, v) { l[field] = v; total.textContent = L.money(L.chargeLineTotal(l)); row.classList.toggle('unnamed', L.isBlankLine(l) && L.hasAmounts(l)); changed(ed); }
       var gst = el('input', { type: 'checkbox', checked: l.gst_applies !== false, disabled: ed.locked, onchange: function () { upd('gst_applies', gst.checked); } });
-      var row = el('div', { class: 'line charge' + (L.isBlankLine(l) && hasNums(l) ? ' unnamed' : '') },
+      var row = el('div', { class: 'line charge' + (L.isBlankLine(l) && L.hasAmounts(l) ? ' unnamed' : '') },
         descInput(l.description, function (v) { upd('description', v); }, ed.locked, 'What the client sees, e.g. Replace fascia, supply and install'),
         lbl('Qty', numInput(l.qty, function (v) { upd('qty', v); }, ed.locked)),
         lbl('Unit', unitInput(l.unit, function (v) { upd('unit', v); }, ed.locked)),
@@ -614,7 +615,7 @@
     var lines = L.chargeFromCosts(ed.draft.cost_lines, pct);
     if (!lines.length) { toast('Add cost lines with a description first.', 'warn'); return; }
     store.setJSON('qb:markup', L.num(pct));
-    var existing = ed.draft.charge_lines.filter(function (l) { return !L.isBlankLine(l) || hasNums(l); });
+    var existing = ed.draft.charge_lines.filter(function (l) { return !L.isBlankLine(l) || L.hasAmounts(l); });
     ed.draft.charge_lines = existing.concat(lines);
     changed(ed);
     drawCharge(ed);
@@ -920,19 +921,22 @@
     if (win) { try { win.document.title = 'Preparing quote…'; win.document.body.textContent = 'Preparing the quote PDF…'; } catch (e) { /* ignore */ } }
     try {
       var qn = ed.locked && ed.latest && ed.latest.quote_number ? ed.latest.quote_number : 'DRAFT';
-      var blob = await window.QBPdf.render(pdfOpts(b, ed, qn));
-      openBlob(blob, win, (b.job.job_number || 'quote') + '-' + qn + '.pdf');
+      var pdf = await window.QBPdf.render(pdfOpts(b, ed, qn));
+      openBlob(pdf.blob, win, (b.job.job_number || 'quote') + '-' + qn + '.pdf');
+      if (pdf.missingPhotos) modal({ title: 'Photos missing from the preview', body: photosMissingText(pdf.missingPhotos) + ', so the preview does not show ' + (pdf.missingPhotos > 1 ? 'them' : 'it') + '. Check your signal and preview again.' });
     } catch (e) {
       if (win) win.close();
       toast('Could not make the PDF: ' + (e.message || e), 'error');
     }
   }
 
+  function photosMissingText(n) { return n + ' photo' + (n > 1 ? 's' : '') + ' could not be loaded'; }
+
   async function issue(b, ed) {
     var charge = L.cleanChargeLines(ed.draft.charge_lines);
     var unnamed = L.unnamedLines(ed.draft.cost_lines) + L.unnamedLines(ed.draft.charge_lines);
     if (!charge.length) { await modal({ title: 'No client lines yet', body: 'Add at least one line under What we charge the client before issuing.' }); return; }
-    if (unnamed) { await modal({ title: 'Some lines have no description', body: unnamed + ' line' + (unnamed > 1 ? 's have' : ' has') + ' a price but no description, so ' + (unnamed > 1 ? 'they are' : 'it is') + ' not saved. Add a description or delete ' + (unnamed > 1 ? 'them' : 'it') + ' first.' }); return; }
+    if (unnamed) { await modal({ title: 'Some lines have no description', body: unnamed + ' line' + (unnamed > 1 ? 's have' : ' has') + ' a price or supplier but no description, so ' + (unnamed > 1 ? 'they are' : 'it is') + ' not saved. Add a description or delete ' + (unnamed > 1 ? 'them' : 'it') + ' first.' }); return; }
     var t = L.totals(ed.draft.cost_lines, ed.draft.charge_lines);
     var ok = await modal({ title: ed.kind === 'variation' ? 'Issue this variation?' : 'Issue this quote?', body: el('div', null,
       el('p', { text: 'Total to the client: ' + L.money(t.charge_total_inc_gst) + ' inc GST. Our cost: ' + L.money(t.cost_total_ex_gst) + '.' }),
@@ -954,9 +958,10 @@
         step('Getting the quote number');
         var slot = await api.pdfSlot(versionId);
         step('Making the PDF (' + slot.quote_number + ')');
-        var blob = await window.QBPdf.render(pdfOpts(b, ed, slot.quote_number));
+        var pdf = await window.QBPdf.render(pdfOpts(b, ed, slot.quote_number));
+        if (pdf.missingPhotos) throw new api.ApiError(0, 'photos_missing', photosMissingText(pdf.missingPhotos) + ', so the quote was not issued. Check your signal and try again.');
         step('Uploading the PDF');
-        await api.putPdf(slot.signed_url, blob);
+        await api.putPdf(slot.signed_url, pdf.blob);
         step('Filing it on the job');
         try { result = await api.issue(versionId, slot.path); }
         catch (e) { if (attempt === 0 && (e.code === 'quote_number_changed' || e.code === 'pdf_not_prepared' || e.code === 'upload_missing')) continue; throw e; }
@@ -1101,9 +1106,14 @@
   }
 
   // ---------- Router ----------
+  // Each navigation gets a number; a screen whose job load comes back after Hugo has moved
+  // on is dropped, so it never opens over (or closes the editor of) the screen he is on.
+  var routeSeq = 0;
   async function route() {
+    var seq = ++routeSeq;
     if (!state.session) { renderSignIn(); return; }
     await flushEditorAndWait();
+    if (seq !== routeSeq) return;
     var h = location.hash || '#/';
     var m;
     if (h === '#/new') { flushEditor(); renderNewPrivate(); }

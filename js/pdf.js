@@ -389,16 +389,18 @@
   }
 
   window.QBPdf = {
-    // photos: [{ url, caption }]; loads the logo and photos, then builds the PDF Blob.
+    // photos: [{ url, caption }]; loads the logo and photos, then builds the PDF. Returns
+    // { blob, missingPhotos }: a photo that will not load is left out and counted, and the
+    // caller decides whether a PDF with photos missing is acceptable.
     async render(opts) {
       var logo = await loadLogo();
-      var loaded = [];
+      var loaded = [], missing = 0;
       for (var i = 0; i < (opts.photos || []).length; i++) {
         var ph = opts.photos[i];
         try { loaded.push({ caption: ph.caption, img: await loadPhoto(ph.url, 1400) }); }
-        catch (e) { console.warn('[qb] photo skipped from PDF', ph.url, e); }
+        catch (e) { missing++; }
       }
-      return build(Object.assign({}, opts, { logo: logo, photos: loaded }));
+      return { blob: build(Object.assign({}, opts, { logo: logo, photos: loaded })), missingPhotos: missing };
     }
   };
 })();

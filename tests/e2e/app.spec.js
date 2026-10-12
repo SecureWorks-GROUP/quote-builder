@@ -410,6 +410,85 @@ test('a retried new variation never takes over a draft variation it did not make
   expect(db.versions.find((v) => v.chain_id === theirs).cost_lines).toEqual([]);
 });
 
+test('issue stops when a ticked photo cannot be loaded: nothing uploaded or frozen; preview says a photo is missing', async ({ page }) => {
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26102")');
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAABxZ0isAAAAGElEQVR4nGP4z8DwHw0zDCQXGgEA9fNfoexZgD8AAAAASUVORK5CYII=', 'base64');
+  await page.locator('input[type=file]:not([capture])').setInputFiles({ name: 'IMG_0042.png', mimeType: 'image/png', buffer: png });
+  await expect(page.locator('.photo input[type=checkbox]')).toBeChecked({ timeout: 10000 });
+  await typeLine(page.locator('.line.charge').nth(0), { description: 'Replace fascia', qty: 1, unit: 'item', price: 650 });
+  await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
+
+  const photoKey = Object.keys(db.files).find((k) => k.startsWith('job-photos/'));
+  const photoFile = db.files[photoKey];
+  delete db.files[photoKey];
+
+  await page.evaluate(() => { window.open = () => null; });
+  await page.click('button:has-text("Preview client PDF")');
+  await expect(page.locator('.modal h2')).toHaveText('Photos missing from the preview', { timeout: 20000 });
+  await expect(page.locator('.modal')).toContainText('1 photo could not be loaded');
+  await page.click('.modal button:has-text("OK")');
+
+  await page.click('button:has-text("Issue client quote")');
+  await page.click('.modal button:has-text("Issue")');
+  await expect(page.locator('.modal h2')).toHaveText('Not issued', { timeout: 20000 });
+  await expect(page.locator('.modal')).toContainText('1 photo could not be loaded, so the quote was not issued');
+  await page.click('.modal button:has-text("OK")');
+  expect(Object.keys(db.files).filter((k) => k.startsWith('job-pdfs/'))).toHaveLength(0);
+  expect(calls('quote_builder_issue')).toHaveLength(0);
+  expect(db.versions[0].status).toBe('draft');
+  expect(db.documents).toHaveLength(0);
+
+  db.files[photoKey] = photoFile;
+  await page.click('button:has-text("Issue client quote")');
+  await page.click('.modal button:has-text("Issue")');
+  await expect(page.locator('.modal h2')).toHaveText('Issued SWR-26102-Q1', { timeout: 20000 });
+  expect(db.versions[0].status).toBe('issued');
+  expect(db.documents).toHaveLength(1);
+});
+
+test('a job that loads after Hugo has opened another one does not take over the open editor', async ({ page }) => {
+  await signIn(page);
+  const slowJob = db.jobs[0].id;
+  let release;
+  const held = new Promise((r) => { release = r; });
+  await page.route((url) => url.searchParams.get('action') === 'quote_builder_get_job' && url.searchParams.get('job_id') === slowJob,
+    async (route) => { await held; await route.fallback(); });
+
+  await page.click('.job-card:has-text("SWR-26101")');
+  await expect(page.getByText('Loading job…')).toBeVisible();
+  await page.click('a:has-text("Jobs")');
+  await page.click('.job-card:has-text("SWR-26103")');
+  await expect(page.locator('.editor')).toBeVisible();
+
+  const landed = page.waitForResponse((r) => r.request().method() === 'GET' && r.url().includes('job_id=' + slowJob));
+  release();
+  await landed;
+  await page.evaluate(() => new Promise((r) => setTimeout(r, 100)));
+  await expect(page.locator('.job-head')).toContainText('SWR-26103');
+
+  // The open editor is still the live one: when signal comes back, its failed save goes up.
+  db.offline = true;
+  await typeLine(page.locator('.line.cost').nth(0), { description: 'Replace 3 roof sheets', qty: 3, unit: 'sheet', price: 80 });
+  await expect(page.locator('.save-state')).toContainText('Not saved to the office', { timeout: 10000 });
+  db.offline = false;
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
+  expect(db.versions).toHaveLength(1);
+  expect(db.versions[0].job_id).toBe(db.jobs[2].id);
+});
+
+test('a line with a supplier but no description is flagged on screen and blocks issuing', async ({ page }) => {
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26103")');
+  await page.locator('.line.cost input.supplier').fill('Bunnings');
+  await expect(page.locator('.line.cost')).toHaveClass(/unnamed/);
+  await typeLine(page.locator('.line.charge').nth(0), { description: 'Replace fascia', qty: 1, unit: 'item', price: 650 });
+  await page.click('button:has-text("Issue client quote")');
+  await expect(page.locator('.modal h2')).toHaveText('Some lines have no description');
+  await expect(page.locator('.modal')).toContainText('1 line has a price or supplier but no description');
+});
+
 test('screens render at iPad size (screenshots for review)', async ({ page }, info) => {
   await signIn(page);
   await page.screenshot({ path: `test-results/shots/${info.project.name}-list.png`, fullPage: true });
