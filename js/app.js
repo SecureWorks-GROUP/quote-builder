@@ -774,7 +774,7 @@
         if (ed.dom.versionBar) drawVersionBar(state.bundles[ed.job.id], ed);
         return true;
       } catch (e) {
-        if (e.code === 'stale_version' || e.code === 'version_frozen' || e.code === 'version_issued') {
+        if (e.code === 'stale_version') {
           handleStale(ed);
         } else if (e.code === 'network' || e.status === 0 || e.status >= 500) {
           setStatus(ed, 'Not saved to the office: no connection. Your work is kept on this iPad and will save when signal is back.', 'warn');

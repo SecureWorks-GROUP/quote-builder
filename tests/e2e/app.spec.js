@@ -143,6 +143,30 @@ test('a failed save keeps the draft on the iPad, says so, and saves when signal 
   expect(db.versions[0].cost_lines[0]).toMatchObject({ description: 'Replace 3 roof sheets', line_total_ex_gst: 240 });
 });
 
+test('sign-in token due for renewal with no signal: the editor stays open, says no connection, and saves when signal is back', async ({ page }) => {
+  test.setTimeout(150000);
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26103")');
+  await expect(page.locator('.editor')).toBeVisible();
+  // The stored session (supabase-js persisted state under the app's storage key) is past its expiry.
+  await page.evaluate(() => {
+    const s = JSON.parse(localStorage.getItem('qb-auth'));
+    s.expires_at = Math.floor(Date.now() / 1000) - 60;
+    localStorage.setItem('qb-auth', JSON.stringify(s));
+  });
+  db.offline = true;
+  await typeLine(page.locator('.line.cost').nth(0), { description: 'Replace 3 roof sheets', qty: 3, unit: 'sheet', price: 80 });
+  await expect(page.locator('.save-state')).toContainText('Not saved to the office: no connection', { timeout: 60000 });
+  await expect(page.locator('.editor')).toBeVisible();
+  await expect(page.locator('#email')).toHaveCount(0);
+  await expect(page.locator('.line.cost textarea.desc').first()).toHaveValue('Replace 3 roof sheets');
+
+  db.offline = false;
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 60000 });
+  expect(db.versions[0].cost_lines[0].description).toBe('Replace 3 roof sheets');
+});
+
 test('a save whose reply is lost: the iPad edits go on top of the saved copy, one version, nothing lost', async ({ page }) => {
   await signIn(page);
   await page.click('.job-card:has-text("SWR-26103")');

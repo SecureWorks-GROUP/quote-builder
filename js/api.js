@@ -19,9 +19,12 @@
   var authListeners = [];
   function onAuthLost(fn) { authListeners.push(fn); }
 
+  // An expired token is renewed inside getSession. When that renewal cannot reach the server
+  // the stored sign-in is still good, so it is a lost connection, not a sign-out.
   async function accessToken() {
     var r = await sb.auth.getSession();
     var s = r && r.data && r.data.session;
+    if (!s && r && r.error && r.error.name === 'AuthRetryableFetchError') throw new ApiError(0, 'network', 'No connection');
     return s ? s.access_token : null;
   }
 
