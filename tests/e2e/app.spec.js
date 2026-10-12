@@ -158,6 +158,56 @@ test('a save whose reply is lost: the iPad edits go on top of the saved copy, on
   expect(db.versions[0].cost_lines[0].unit_cost_ex_gst).toBe(150);
 });
 
+test('opening a job and switching apps without typing saves nothing to the office', async ({ page }) => {
+  const switchApps = () => page.evaluate(() => {
+    for (const s of ['hidden', 'visible']) {
+      Object.defineProperty(document, 'visibilityState', { value: s, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }
+    window.dispatchEvent(new Event('online'));
+  });
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26103")');
+  await expect(page.locator('.editor')).toBeVisible();
+  await switchApps();
+  await page.click('.tab:has-text("Variations")');
+  await page.click('a:has-text("+ New variation")');
+  await expect(page.locator('.editor')).toBeVisible();
+  await switchApps();
+
+  await page.click('.tab:has-text("Variations")');
+  await expect(page.getByText('No variations on this job yet.')).toBeVisible();
+  await page.click('a:has-text("Jobs")');
+  await expect(page.locator('.job-card:has-text("SWR-26103") .job-scope')).toHaveText('Not scoped yet');
+  expect(calls('quote_builder_save')).toHaveLength(0);
+  expect(db.versions).toHaveLength(0);
+});
+
+test('issue whose reply is lost: the next try shows it as already issued and locked, not a second quote', async ({ page }) => {
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26103")');
+  await typeLine(page.locator('.line.cost').nth(0), { description: 'Gutter repair', qty: 1, unit: 'item', price: 120 });
+  await typeLine(page.locator('.line.charge').nth(0), { description: 'Repair gutter', qty: 1, unit: 'item', price: 200 });
+  await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
+
+  db.loseReply.quote_builder_issue = true;
+  await page.click('button:has-text("Issue client quote")');
+  await page.click('.modal button:has-text("Issue")');
+  await expect(page.locator('.modal h2')).toHaveText('Not issued', { timeout: 20000 });
+  await page.click('.modal button:has-text("OK")');
+  expect(db.versions[0].status).toBe('issued');
+
+  await page.click('button:has-text("Issue client quote")');
+  await page.click('.modal button:has-text("Issue")');
+  await expect(page.locator('.modal h2')).toHaveText('Already issued', { timeout: 20000 });
+  await page.click('.modal button:has-text("OK")');
+  await expect(page.locator('.version-bar')).toContainText(/version 1 issued .* as SWR-26103-Q1/);
+  await expect(page.locator('.version-bar a:has-text("Open issued PDF")')).toBeVisible();
+  await expect(page.locator('.line.cost textarea.desc').first()).toBeDisabled();
+  expect(db.versions).toHaveLength(1);
+  expect(db.documents).toHaveLength(1);
+});
+
 test('the list says when it cannot load and loads on Try again', async ({ page }) => {
   await signIn(page);
   db.offline = true;
@@ -268,6 +318,12 @@ test('variation: same two-part layout, issue moves the card to Variation, approv
   await expect(page).toHaveURL(/\/var\/[0-9a-f-]{36}$/);
   expect(calls('quote_builder_save').filter((c) => c.body.kind === 'variation' && !c.body.chain_id)).toHaveLength(1);
 
+  // Back to the list and into the same variation again: the tap opens it.
+  await page.click('.tab:has-text("Variations")');
+  await expect(page.locator('.var-row')).toHaveCount(1);
+  await page.click('.var-row .var-main');
+  await expect(page.locator('.title-input')).toHaveValue('Extra rotten fascia found');
+
   await page.click('button:has-text("Issue variation quote")');
   await page.click('.modal button:has-text("Issue")');
   await expect(page.locator('.modal h2')).toHaveText('Issued SWR-26101-V1.1', { timeout: 20000 });
@@ -282,6 +338,51 @@ test('variation: same two-part layout, issue moves the card to Variation, approv
   await expect(page.locator('.var-row')).toContainText('Approved');
   expect(db.jobs[0].repair_stage).toBe('approved');
   expect(calls('quote_builder_decide_variation')[0].body).toMatchObject({ approved: true, notes: 'Builder approved by email' });
+});
+
+test('new variation whose first save reply is lost: the retry saves into it, exactly one variation', async ({ page }) => {
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26101")');
+  await page.click('.tab:has-text("Variations")');
+  await page.click('a:has-text("+ New variation")');
+  db.loseReply.quote_builder_save = true;
+  await page.fill('.title-input', 'Extra rotten fascia found');
+  await expect(page.locator('.save-state')).toContainText('Not saved to the office', { timeout: 10000 });
+  expect(Object.keys(db.chains)).toHaveLength(1);
+
+  await typeLine(page.locator('.line.cost').nth(0), { description: 'Extra fascia board', qty: 2, unit: 'm', price: 18 });
+  await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
+  await expect(page).toHaveURL(/\/var\/[0-9a-f-]{36}$/);
+  expect(Object.keys(db.chains)).toHaveLength(1);
+  expect(db.versions).toHaveLength(1);
+  expect(db.versions[0]).toMatchObject({ kind: 'variation', title: 'Extra rotten fascia found' });
+  expect(db.versions[0].cost_lines[0].description).toBe('Extra fascia board');
+
+  await page.click('.tab:has-text("Variations")');
+  await expect(page.locator('.var-row')).toHaveCount(1);
+  await expect(page.locator('.var-row')).toContainText('Extra rotten fascia found');
+});
+
+test('new variation whose first save reply is lost, then the iPad reloads: still exactly one variation', async ({ page }) => {
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26101")');
+  await page.click('.tab:has-text("Variations")');
+  await page.click('a:has-text("+ New variation")');
+  db.loseReply.quote_builder_save = true;
+  await page.fill('.title-input', 'Extra rotten fascia found');
+  await expect(page.locator('.save-state')).toContainText('Not saved to the office', { timeout: 10000 });
+  db.offline = true;
+  await page.reload();
+  await expect(page.locator('.banner-error')).toContainText('No connection');
+
+  db.offline = false;
+  await page.click('button:has-text("Try again")');
+  await expect(page.locator('.title-input')).toHaveValue('Extra rotten fascia found');
+  await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
+  expect(Object.keys(db.chains)).toHaveLength(1);
+  expect(db.versions).toHaveLength(1);
+  await page.click('.tab:has-text("Variations")');
+  await expect(page.locator('.var-row')).toHaveCount(1);
 });
 
 test('screens render at iPad size (screenshots for review)', async ({ page }, info) => {

@@ -364,6 +364,7 @@
       syncedFp: null,
       saving: false, again: false, timer: null, retryTimer: null,
       status: '',
+      knownChains: null,
       variation: chain && kind === 'variation' ? chain : null,
       dom: {}
     };
@@ -377,6 +378,7 @@
       if ((local.base_version_id || null) !== ed.baseVersionId) ed.notice = 'Unsaved edits kept on this iPad from ' + L.fmtDateTime(local.updated_at) + ' have been put on top of the saved quote. Check it before issuing.';
       ed.draft = local.draft; ed.locked = false;
       if (local.chain_id && !ed.chainId) ed.chainId = local.chain_id;
+      if (isNew && local.known_chains) ed.knownChains = local.known_chains;
     }
     if (!ed.draft.cost_lines.length) ed.draft.cost_lines.push(L.blankCostLine());
     if (!ed.draft.charge_lines.length) ed.draft.charge_lines.push(L.blankChargeLine());
@@ -722,7 +724,7 @@
   function writeLocal(ed, dirty) {
     var fp = L.draftFingerprint(ed.draft);
     store.setJSON(ed.key, {
-      v: 1, job_id: ed.job.id, kind: ed.kind, chain_id: ed.chainId, base_version_id: ed.baseVersionId,
+      v: 1, job_id: ed.job.id, kind: ed.kind, chain_id: ed.chainId, base_version_id: ed.baseVersionId, known_chains: ed.knownChains,
       draft: ed.draft, dirty: dirty && fp !== ed.syncedFp, updated_at: new Date().toISOString()
     });
   }
@@ -738,17 +740,27 @@
   }
 
   // Saves the draft to Supabase. One request at a time; edits made while a save is in
-  // flight are picked up by a follow-up save.
-  async function cloudSave(ed) {
+  // flight are picked up by a follow-up save. Nothing changed means nothing is sent, so an
+  // untouched job never gets an empty version; the one exception is issuing a revision that
+  // has no edits, which still needs its draft version made first.
+  async function cloudSave(ed, forIssue) {
     if (ed.locked) return true;
     if (ed.stale) return false;
     if (ed.saving) { ed.again = true; return ed.savingPromise; }
     var fp = L.draftFingerprint(ed.draft);
-    if (fp === ed.syncedFp && ed.baseVersionId && ed.latest && ed.latest.status === 'draft') { writeLocal(ed, false); setStatus(ed, savedText(ed), 'ok'); return true; }
+    if (fp === ed.syncedFp && !(forIssue && ed.latest && ed.latest.status === 'issued')) {
+      writeLocal(ed, false);
+      if (ed.latest) setStatus(ed, savedText(ed), 'ok');
+      return true;
+    }
     ed.saving = true;
     setStatus(ed, 'Saving…');
     ed.savingPromise = (async function () {
       try {
+        if (ed.kind === 'variation' && !ed.chainId) {
+          if (ed.knownChains) await adoptLostChain(ed);
+          else { ed.knownChains = (state.bundles[ed.job.id].variations || []).map(function (c) { return c.chain_id; }); writeLocal(ed, true); }
+        }
         var payload = L.savePayload(ed.job, ed.kind, ed.chainId, ed.baseVersionId, ed.draft);
         var sentFp = L.draftFingerprint(ed.draft);
         var r = await api.save(payload);
@@ -791,14 +803,36 @@
     return 'Saved' + (v ? ' as version ' + v.version : '') + ' ' + new Date().toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' });
   }
 
+  // A new variation gets its chain from its first save. If that save was sent before and its
+  // reply was lost, the office already has the chain: find it before sending again, so a retry
+  // saves into it and never makes a second variation. It is the one-version draft of ours that
+  // was not there when the first save went and that no other draft on this iPad owns.
+  async function adoptLostChain(ed) {
+    var b = await api.getJob(ed.job.id);
+    var me = state.session && state.session.user && state.session.user.id;
+    var made = (b.variations || []).filter(function (c) {
+      var lv = L.latestVersion(c);
+      return ed.knownChains.indexOf(c.chain_id) === -1 && c.versions.length === 1 && lv.status === 'draft' &&
+        (!me || !lv.created_by || lv.created_by === me) && !store.getJSON(L.draftKey(ed.job.id, 'variation', c.chain_id));
+    });
+    if (made.length !== 1) return;
+    var v = made[0].versions[0];
+    adoptNewChain(ed, made[0].chain_id);
+    ed.chainId = made[0].chain_id;
+    ed.baseVersionId = v.id;
+    ed.latest = v;
+    writeLocal(ed, true);
+  }
+
   // Move the local draft from its new-xxx key to the real chain id and fix the address bar.
   function adoptNewChain(ed, chainId) {
     var oldKey = ed.key;
     ed.localRef = chainId;
     ed.key = L.draftKey(ed.job.id, 'variation', chainId);
+    ed.knownChains = null;
     store.remove(oldKey);
     var h = '#/job/' + ed.job.id + '/var/' + chainId;
-    if (location.hash !== h) { ignoreHash = h; history.replaceState(null, '', h); }
+    if (!ed.closed && location.hash !== h) history.replaceState(null, '', h);
   }
 
   function mergeVersion(ed, v) {
@@ -912,7 +946,7 @@
     try {
       clearTimeout(ed.timer);
       if (ed.saving) await ed.savingPromise;
-      var saved = await cloudSave(ed);
+      var saved = await cloudSave(ed, true);
       if (!saved || L.draftFingerprint(ed.draft) !== ed.syncedFp || !ed.baseVersionId) throw new api.ApiError(0, 'not_saved', 'The latest edits could not be saved, so the quote was not issued. Check your signal and try again.');
       var versionId = ed.baseVersionId;
       var result = null;
@@ -939,8 +973,9 @@
       rerender();
     } catch (e) {
       busy.remove();
-      await modal({ title: 'Not issued', body: errorText(e) + (e.code === 'variation_decided' ? ' Start a new variation instead.' : '') });
-      if (e.code === 'stale_version') rerender();
+      if (e.code === 'version_frozen') await modal({ title: 'Already issued', body: 'This version has already been issued. Opening it now so you can see it and its PDF.' });
+      else await modal({ title: 'Not issued', body: errorText(e) + (e.code === 'variation_decided' ? ' Start a new variation instead.' : '') });
+      if (e.code === 'stale_version' || e.code === 'version_frozen') rerender();
     }
   }
 
@@ -1066,7 +1101,6 @@
   }
 
   // ---------- Router ----------
-  var ignoreHash = null;
   async function route() {
     if (!state.session) { renderSignIn(); return; }
     await flushEditorAndWait();
@@ -1081,10 +1115,7 @@
     else { flushEditor(); renderList(); }
   }
 
-  window.addEventListener('hashchange', function () {
-    if (ignoreHash && location.hash === ignoreHash) { ignoreHash = null; return; }
-    route();
-  });
+  window.addEventListener('hashchange', route);
   window.addEventListener('online', function () {
     state.online = true; refreshTopbarBadge();
     if (state.editor) cloudSave(state.editor);
