@@ -8,7 +8,7 @@ Backend contract: secureworks-backend `docs/quote-builder-contract.md` (ops-api 
 
 1. Open the link on the iPad in Safari. Tip: Share, then Add to Home Screen.
 2. Sign in with your normal SecureWorks email and password (same as the fence and patio tools).
-3. **Insurance repairs** lists repair jobs at Work order in or Scoping, grouped by builder. Search by job number, client, address, builder or work order.
+3. **Insurance repairs** opens on **To scope** (repair jobs at Work order in or Scoping), grouped by builder. The **Quoted** and **Approved and on** buttons show jobs further along. Search by job number, client, address, builder or work order.
 4. Open a job:
    - **What it costs us** (top, internal only): description, qty, unit, unit cost, supplier or trade. Never printed on the quote.
    - **Site photos**: Take photo or choose from the library, add a caption. Ticked photos go on the client quote.
