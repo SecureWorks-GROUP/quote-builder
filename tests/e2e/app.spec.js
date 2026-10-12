@@ -385,6 +385,31 @@ test('new variation whose first save reply is lost, then the iPad reloads: still
   await expect(page.locator('.var-row')).toHaveCount(1);
 });
 
+test('a retried new variation never takes over a draft variation it did not make', async ({ page }) => {
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26101")');
+  await page.click('.tab:has-text("Variations")');
+  await page.click('a:has-text("+ New variation")');
+  await expect(page.locator('.editor')).toBeVisible();
+  db.offline = true;
+  await page.fill('.title-input', 'Extra rotten fascia found');
+  await expect(page.locator('.save-state')).toContainText('Not saved to the office', { timeout: 10000 });
+  expect(db.versions).toHaveLength(0);
+
+  // Meanwhile the office adds its own draft variation to the job, with no staff login on it.
+  const theirs = '99999999-9999-4999-8999-999999999999';
+  db.chains[theirs] = { job_id: db.jobs[0].id, kind: 'variation' };
+  db.versions.push({ id: '88888888-8888-4888-8888-888888888888', job_id: db.jobs[0].id, kind: 'variation', chain_id: theirs, version: 1, status: 'draft', created_by: null,
+    title: 'Office variation', narrative: '', cost_lines: [], charge_lines: [], photo_media_ids: [], cost_total_ex_gst: 0, charge_total_ex_gst: 0, charge_gst: 0, charge_total_inc_gst: 0, margin_ex_gst: 0, margin_pct: null });
+  db.offline = false;
+  await typeLine(page.locator('.line.cost').nth(0), { description: 'Extra fascia board', qty: 2, unit: 'm', price: 18 });
+  await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
+
+  expect(Object.keys(db.chains)).toHaveLength(2);
+  expect(db.versions.map((v) => v.title).sort()).toEqual(['Extra rotten fascia found', 'Office variation']);
+  expect(db.versions.find((v) => v.chain_id === theirs).cost_lines).toEqual([]);
+});
+
 test('screens render at iPad size (screenshots for review)', async ({ page }, info) => {
   await signIn(page);
   await page.screenshot({ path: `test-results/shots/${info.project.name}-list.png`, fullPage: true });

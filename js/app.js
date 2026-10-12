@@ -813,7 +813,7 @@
     var made = (b.variations || []).filter(function (c) {
       var lv = L.latestVersion(c);
       return ed.knownChains.indexOf(c.chain_id) === -1 && c.versions.length === 1 && lv.status === 'draft' &&
-        (!me || !lv.created_by || lv.created_by === me) && !store.getJSON(L.draftKey(ed.job.id, 'variation', c.chain_id));
+        !!me && lv.created_by === me && !store.getJSON(L.draftKey(ed.job.id, 'variation', c.chain_id));
     });
     if (made.length !== 1) return;
     var v = made[0].versions[0];
