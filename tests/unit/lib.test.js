@@ -21,6 +21,15 @@ test('totals match the contract: GST only on gst_applies lines, margin over char
   assert.equal(t.margin_pct, 46);
 });
 
+test('a unit price typed past cents totals the same on screen as the saved, rounded line', () => {
+  const cost = [{ description: 'Sheet', qty: 100, unit: 'm', unit_cost_ex_gst: '2.375' }];
+  const charge = [{ description: 'Supply', qty: 1000, unit: 'm', unit_price_ex_gst: '1.005', gst_applies: true }];
+  assert.equal(L.costLineTotal(cost[0]), 238);
+  assert.equal(L.chargeLineTotal(charge[0]), 1010);
+  assert.deepEqual(L.totals(cost, charge), L.totals(L.cleanCostLines(cost), L.cleanChargeLines(charge)));
+  assert.equal(L.totals(cost, charge).charge_total_inc_gst, 1111);
+});
+
 test('margin_pct is null when nothing is charged', () => {
   assert.equal(L.totals([{ description: 'x', qty: 1, unit_cost_ex_gst: 10 }], []).margin_pct, null);
 });

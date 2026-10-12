@@ -129,11 +129,39 @@ test('signing out with no signal still removes the login from this iPad', async 
   await page.click('.modal button:has-text("Sign out")');
   await expect(page.locator('#email')).toBeVisible();
 
+  // Still no signal: signing back in says so in plain words.
+  await page.fill('#email', 'hugo@secureworkswa.com.au');
+  await page.fill('#password', 'right-password');
+  await page.click('button[type=submit]');
+  await expect(page.locator('.form-error')).toHaveText('No connection. Check your signal and try again.');
+
   db.offline = false;
   await page.reload();
   await expect(page.locator('#email')).toBeVisible();
   await expect(page.locator('.job-list')).toHaveCount(0);
   expect(calls('quote_builder_list_jobs')).toHaveLength(1);
+});
+
+test('signing out ends this device\'s login only, not every device on the shared login', async ({ page }) => {
+  await signIn(page);
+  await page.click('button:has-text("Sign out")');
+  await page.click('.modal button:has-text("Sign out")');
+  await expect(page.locator('#email')).toBeVisible();
+  expect(db.logouts).toEqual(['local']);
+  await page.reload();
+  await expect(page.locator('#email')).toBeVisible();
+});
+
+test('a unit price typed past cents shows the same total on screen as the issued quote carries', async ({ page }) => {
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26103")');
+  await typeLine(page.locator('.line.charge').nth(0), { description: 'Supply sheeting', qty: 1000, unit: 'm', price: 1.005 });
+  await expect(page.locator('.line.charge .line-total')).toHaveText('$1,010.00');
+  await expect(page.locator('.tot-row.grand strong')).toHaveText('$1,111.00');
+  await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
+  expect(db.versions[0].charge_total_inc_gst).toBe(1111);
+  await page.click('button:has-text("Issue client quote")');
+  await expect(page.locator('.modal')).toContainText('Total to the client: $1,111.00 inc GST');
 });
 
 test('a quantity with 3 decimals prints as typed, so the row multiplies out on the PDF and in History', async ({ page }) => {

@@ -94,8 +94,9 @@
     return { line_id: newLineId('charge'), description: '', qty: 1, unit: 'item', unit_price_ex_gst: 0, gst_applies: true };
   }
 
-  function costLineTotal(l) { return round2(num(l.qty) * num(l.unit_cost_ex_gst)); }
-  function chargeLineTotal(l) { return round2(num(l.qty) * num(l.unit_price_ex_gst)); }
+  // The unit amount is saved in whole cents, so the line is worked out from it in whole cents.
+  function costLineTotal(l) { return round2(num(l.qty) * round2(num(l.unit_cost_ex_gst))); }
+  function chargeLineTotal(l) { return round2(num(l.qty) * round2(num(l.unit_price_ex_gst))); }
   function chargeLineGst(l) { return l.gst_applies === false ? 0 : round2(chargeLineTotal(l) * GST_RATE); }
 
   // Mirrors the server's sums so the screen agrees with what the server stores.

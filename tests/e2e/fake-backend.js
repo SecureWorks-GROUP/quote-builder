@@ -26,6 +26,7 @@ function seed() {
     offline: false,
     loseReply: {},    // action -> true: the next call is carried out, then its reply is dropped
     calls: [],
+    logouts: [],      // scope of each sign-out the auth server was sent
     files: {},
     jobs: [
       job({ job_number: 'SWR-26101', type: 'repair', repair_stage: 'scoping', client_name: 'J Smith', site_address: '12 Example St', site_suburb: 'Morley', builder_name: 'ML Builders', builder_work_order: 'MLB-27093', builder_purchase_order: 'PO-56481' }),
@@ -251,7 +252,7 @@ async function install(page, db) {
       return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify({
         access_token: 'test-access-token', token_type: 'bearer', expires_in: 3600, expires_at: exp, refresh_token: 'r', user: USER }) });
     }
-    if (url.pathname === '/auth/v1/logout') return route.fulfill({ status: 204, headers: cors });
+    if (url.pathname === '/auth/v1/logout') { db.logouts.push(url.searchParams.get('scope')); return route.fulfill({ status: 204, headers: cors }); }
     if (url.pathname === '/auth/v1/user') return route.fulfill({ status: 200, headers: cors, contentType: 'application/json', body: JSON.stringify(USER) });
 
     if (url.pathname.startsWith('/storage/v1/object/upload/sign/')) {

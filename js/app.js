@@ -121,7 +121,8 @@
         state.session = await api.signIn(email.value.trim(), pw.value);
         route();
       } catch (ex) {
-        err.textContent = /invalid/i.test(ex.message || '') ? 'Email or password is not right.' : errorText(ex);
+        err.textContent = /invalid/i.test(ex.message || '') ? 'Email or password is not right.' :
+          ex.name === 'AuthRetryableFetchError' ? 'No connection. Check your signal and try again.' : errorText(ex);
         btn.disabled = false; btn.textContent = 'Sign in';
       }
     } },

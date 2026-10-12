@@ -91,10 +91,11 @@
       if (r.error) throw r.error;
       return r.data.session;
     },
+    // Ends this device's login only, so the fence and patio tools stay signed in elsewhere.
     // supabase-js tells the server first and, when that call fails (no signal), leaves the
     // login stored on the device. Signing out here always removes it from this device.
     async signOut() {
-      try { await sb.auth.signOut(); } catch (e) { /* removed below */ }
+      try { await sb.auth.signOut({ scope: 'local' }); } catch (e) { /* removed below */ }
       try { localStorage.removeItem(AUTH_KEY); } catch (e) { /* storage unavailable: nothing stored */ }
     },
     onAuthChange(fn) { sb.auth.onAuthStateChange(function (event, session) { fn(event, session); }); },
