@@ -141,5 +141,5 @@ Built on the build note's own defaults; none blocks the app.
 | Q3 who may change the settings | Open. Nobody can change them in the app: there is no in-app editor. They are set on the server. |
 | Q4 one pair of numbers or one per builder | One pair, whatever the server sends for the job. A per-builder pair would be a server change to what `settings` returns for that job. |
 | Q5 job values for quotes issued earlier | Nothing. Back end and owner. |
-| Q6 may a trade see labour dollars | Open, for the later crew work order (section 4). The scope of works can go to a builder or a trade, so it shows no labour dollars and no hours allowed. The hours allowed stay on the quote screen and in History. |
+| Q6 may a trade see labour dollars | Open, for the later crew work order (section 4). The scope of works can go to a builder or a trade: it has no Labour allowed section, no dollar amount and no figure from the internal cost table. Client line quantities and units print on it as they do on the client quote, so a client line in hours shows its hours; Hugo edits the client line if he does not want them shown. The Labour allowed total stays on the quote screen and in History. |
 | Q7 rule for Other lines | The old markup question. |

@@ -2,8 +2,9 @@
 // template (patio repo SecureWorks_PDF_Brand_Template_Spec.md): orange header band, dark
 // dusty blue section bars, tinted alternating rows, dark price block, orange footer rule.
 // Three documents come from one scope: the client quote (charge lines only; internal cost
-// lines never reach it), the scope of works (the client lines and hours allowed, no dollar
-// amount) and the material order list (our costs by supplier, internal, never for the client).
+// lines never reach it), the scope of works (the client lines with their quantities and
+// units, no dollar amount, no Labour allowed section and no figure from the internal cost
+// table) and the material order list (our costs by supplier, internal, never for the client).
 (function () {
   'use strict';
   var L = window.QBLib;
@@ -489,9 +490,11 @@
     { key: 'total', w: 29, align: 'right', title: 'Cost' }
   ];
 
-  // Scope of works: the write-up, the client lines as description, quantity and unit, and
-  // the ticked photos. It is never given the cost lines or the hours of labour allowed and
-  // it prints no dollar amount of any kind, so it is safe to hand to a trade or a builder.
+  // Scope of works: the write-up, the client lines as description, quantity and unit (as
+  // they print on the client quote) and the ticked photos. It is never given the cost
+  // lines, so it has no Labour allowed section and no figure from the internal cost table,
+  // and it prints no dollar amount of any kind. A client line in hours prints its hours like
+  // any other quantity: Hugo edits the client line if he does not want them shown.
   function buildScope(opts) {
     var d = startDoc(opts, 'Scope of works', 'Scope of works for the job. No prices.');
     var doc = d.doc, y = d.y, v = opts.version;

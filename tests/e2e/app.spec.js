@@ -794,7 +794,7 @@ test('private quote: line types and labour show, but Fill keeps the one markup q
   await expect(page.locator('.line.charge .line-total')).toHaveText(['$260.00', '$520.00', '$260.00']);
 });
 
-test('scope of works has no dollar amount and no labour hours allowed; material order list has Material lines by supplier and nothing else', async ({ page }) => {
+test('scope of works prints the client lines with their quantities, no dollar amount, no Labour allowed section and nothing from the cost table; material order list has Material lines by supplier and nothing else', async ({ page }) => {
   await capturePdfs(page);
   await signIn(page);
   await page.click('.job-card:has-text("SWR-26103")');
@@ -806,14 +806,23 @@ test('scope of works has no dollar amount and no labour hours allowed; material 
   await page.click('button:has-text("Fill from costs")');
   await page.locator('.modal input').fill('10');
   await page.click('.modal button:has-text("Fill")');
+  // The client Labour line is reworded to 7.5 hours; the cost table still allows 8.
+  await page.locator('.line.charge').nth(1).locator('input.num').nth(0).fill('7.5');
+  await expect(page.locator('.labour-tile')).toContainText('8 hours');
   await page.evaluate(() => { window.open = () => null; });
 
   await page.click('button:has-text("Scope of works (no prices)")');
   const scope = await lastPdfWords(page, 1, 'scope-of-works');
   for (const want of ['Scope of works', 'Storm damage repairs', 'Replace damaged fascia to the rear eave', 'Fascia board', 'Carpenter on site', 'SWR-26103', 'MLB-27100']) expect(scope).toContain(want);
+  // Each printed piece of text on its own, so a table cell is matched whole.
+  const cells = scope.split('\n').map((s) => s.slice(1, s.lastIndexOf(')')));
+  // Client line quantities and units print as they do on the client quote.
+  for (const want of ['10', 'm', '7.5', 'hr', '6', 'lm']) expect(cells).toContain(want);
+  // Nothing from the cost table: no Labour allowed section, not its 8 hours, no dollar amount, no supplier.
   expect(scope).not.toContain('$');
   expect(scope.toLowerCase()).not.toContain('labour allowed');
   expect(scope).not.toContain('8 hours');
+  expect(cells).not.toContain('8');
   for (const secret of ['Bunnings', 'Stratco', 'Dave the chippy', 'Skip hire co']) expect(scope).not.toContain(secret);
 
   await page.click('button:has-text("Material order list")');
