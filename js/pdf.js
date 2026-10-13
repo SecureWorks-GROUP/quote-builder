@@ -1,7 +1,9 @@
 // Client quote PDF, built in the browser with jsPDF. Follows the SecureWorks PDF brand
 // template (patio repo SecureWorks_PDF_Brand_Template_Spec.md): orange header band, dark
 // dusty blue section bars, tinted alternating rows, dark price block, orange footer rule.
-// It prints charge lines only. Internal cost lines never reach this file.
+// Three documents come from one scope: the client quote (charge lines only; internal cost
+// lines never reach it), the scope of works (the client lines and hours allowed, no dollar
+// amount) and the material order list (our costs by supplier, internal, never for the client).
 (function () {
   'use strict';
   var L = window.QBLib;
@@ -189,12 +191,12 @@
     { key: 'amount', w: 29, align: 'right', title: 'Amount' }
   ];
 
-  function tableHeader(doc, y) {
+  function tableHeader(doc, y, cols) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9);
     doc.setTextColor.apply(doc, MID);
     var x = MARGIN;
-    COLS.forEach(function (c) {
+    (cols || COLS).forEach(function (c) {
       var tx = c.align === 'right' ? x + c.w - 3 : x + 3;
       doc.text(c.title, tx, y + 5, { align: c.align });
       x += c.w;
@@ -352,40 +354,220 @@
     doc.setTextColor.apply(doc, MID);
     termLines.forEach(function (ln) { doc.text(ln, MARGIN + 1, y); y += 3.4; });
 
-    var photos = (opts.photos || []).filter(function (ph) { return ph && ph.img; });
-    if (photos.length) {
-      y = newPage();
-      y = pageTitle(doc, 'Site photos', y + 2);
-      var gap = 6, cardW = (CONTENT_W - gap) / 2, pad = 4, imgMaxH = 62;
-      var col = 0, rowTop = y, rowH = 0;
-      photos.forEach(function (ph) {
-        doc.setFontSize(8.5);
-        var cap = ph.caption ? doc.splitTextToSize(ph.caption, cardW - pad * 2) : [];
-        var iw = cardW - pad * 2, ih = iw * (ph.img.h / ph.img.w);
-        if (ih > imgMaxH) { ih = imgMaxH; iw = ih * (ph.img.w / ph.img.h); }
-        var h = pad + imgMaxH + (cap.length ? 3 + cap.length * 3.8 : 0) + pad;
-        if (col === 0 && rowTop + h > CONTENT_BOTTOM) { rowTop = newPage(); rowH = 0; }
-        var cx = MARGIN + col * (cardW + gap);
-        doc.setFillColor.apply(doc, TINT);
-        doc.roundedRect(cx, rowTop, cardW, h, 2, 2, 'F');
-        doc.addImage(ph.img.data, 'JPEG', cx + (cardW - iw) / 2, rowTop + pad + (imgMaxH - ih) / 2, iw, ih);
-        if (cap.length) {
-          doc.setFont('helvetica', 'normal');
-          doc.setTextColor.apply(doc, BODY);
-          doc.text(cap, cx + pad, rowTop + pad + imgMaxH + 5);
-        }
-        rowH = Math.max(rowH, h);
-        col++;
-        if (col === 2) { col = 0; rowTop += rowH + gap; rowH = 0; }
-      });
-    }
+    photoPages(doc, opts.photos, newPage);
 
+    return finish(doc, quoteNumber, opts.preparedBy);
+  }
+
+  // Site photos, two to a row, starting on a fresh page.
+  function photoPages(doc, list, newPage) {
+    var photos = (list || []).filter(function (ph) { return ph && ph.img; });
+    if (!photos.length) return;
+    var y = newPage();
+    y = pageTitle(doc, 'Site photos', y + 2);
+    var gap = 6, cardW = (CONTENT_W - gap) / 2, pad = 4, imgMaxH = 62;
+    var col = 0, rowTop = y, rowH = 0;
+    photos.forEach(function (ph) {
+      doc.setFontSize(8.5);
+      var cap = ph.caption ? doc.splitTextToSize(ph.caption, cardW - pad * 2) : [];
+      var iw = cardW - pad * 2, ih = iw * (ph.img.h / ph.img.w);
+      if (ih > imgMaxH) { ih = imgMaxH; iw = ih * (ph.img.w / ph.img.h); }
+      var h = pad + imgMaxH + (cap.length ? 3 + cap.length * 3.8 : 0) + pad;
+      if (col === 0 && rowTop + h > CONTENT_BOTTOM) { rowTop = newPage(); rowH = 0; }
+      var cx = MARGIN + col * (cardW + gap);
+      doc.setFillColor.apply(doc, TINT);
+      doc.roundedRect(cx, rowTop, cardW, h, 2, 2, 'F');
+      doc.addImage(ph.img.data, 'JPEG', cx + (cardW - iw) / 2, rowTop + pad + (imgMaxH - ih) / 2, iw, ih);
+      if (cap.length) {
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor.apply(doc, BODY);
+        doc.text(cap, cx + pad, rowTop + pad + imgMaxH + 5);
+      }
+      rowH = Math.max(rowH, h);
+      col++;
+      if (col === 2) { col = 0; rowTop += rowH + gap; rowH = 0; }
+    });
+  }
+
+  function finish(doc, ref, preparedBy) {
     var pages = doc.internal.getNumberOfPages();
     for (var pg = 1; pg <= pages; pg++) {
       doc.setPage(pg);
-      footer(doc, pg, pages, quoteNumber, opts.preparedBy);
+      footer(doc, pg, pages, ref, preparedBy);
     }
     return doc.output('blob');
+  }
+
+  // A plain table for the internal documents: the first column wraps, the others are one line.
+  function drawTable(doc, y, cols, rows, newPage) {
+    y = tableHeader(doc, y, cols);
+    rows.forEach(function (cells, idx) {
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      var dl = doc.splitTextToSize(String(cells[cols[0].key] || ''), cols[0].w - 5);
+      var rowH = Math.max(7.5, dl.length * 4.2 + 3.3);
+      if (y + rowH > CONTENT_BOTTOM) { y = newPage(); y = tableHeader(doc, y, cols); }
+      if (idx % 2 === 1) {
+        doc.setFillColor.apply(doc, TINT);
+        doc.rect(MARGIN, y, CONTENT_W, rowH, 'F');
+      }
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      doc.setTextColor.apply(doc, BODY);
+      var x = MARGIN;
+      cols.forEach(function (c, ci) {
+        var tx = c.align === 'right' ? x + c.w - 3 : x + 3;
+        var value = cells[c.key] == null ? '' : String(cells[c.key]);
+        doc.text(ci === 0 ? dl : (value ? doc.splitTextToSize(value, c.w - 4)[0] : ''), tx, y + 5, { align: c.align });
+        x += c.w;
+      });
+      y += rowH;
+    });
+    doc.setDrawColor.apply(doc, RULE);
+    doc.setLineWidth(0.3 * 0.3528);
+    doc.line(MARGIN, y, MARGIN + CONTENT_W, y);
+    return y + 3;
+  }
+
+  function jobRows(job) {
+    var left = [['Job number', job.job_number || '']], right = [['Site address', L.addressLine(job) || 'To be confirmed']];
+    if (job.builder_name) left.push(['Builder', job.builder_name]);
+    if (job.builder_work_order) left.push(['Builder work order', job.builder_work_order]);
+    if (job.client_name) right.push([job.builder_name ? 'Property owner' : 'Client', job.client_name]);
+    return { left: left, right: right };
+  }
+
+  // The opening every internal document shares: band, title, what it is for, the job panel.
+  function startDoc(opts, title, note) {
+    var jsPDF = window.jspdf.jsPDF;
+    var doc = new jsPDF({ unit: 'mm', format: 'a4', compress: !window.QB_PDF_PLAIN });
+    var ref = opts.quoteNumber || 'DRAFT';
+    var dateText = L.fmtDate(opts.date || new Date().toISOString());
+    var newPage = function () {
+      doc.addPage();
+      header(doc, opts.logo, ref, dateText);
+      return BAND_H + 10;
+    };
+    header(doc, opts.logo, ref, dateText);
+    var y = pageTitle(doc, title, BAND_H + 12);
+    if (opts.version.title) {
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor.apply(doc, DARK);
+      var tl = doc.splitTextToSize(opts.version.title, CONTENT_W);
+      doc.text(tl, MARGIN, y);
+      y += tl.length * 5 + 2;
+    }
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor.apply(doc, MID);
+    doc.text(note, MARGIN, y);
+    y += 6;
+    var p = jobRows(opts.job);
+    y = detailPanel(doc, y, p.left, p.right);
+    return { doc: doc, y: y, newPage: newPage, ref: ref };
+  }
+
+  function plainLine(doc, text, y, bold) {
+    doc.setFont('helvetica', bold ? 'bold' : 'normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor.apply(doc, bold ? DARK : BODY);
+    doc.text(text, MARGIN + 1, y + 3.5);
+    return y + 6;
+  }
+
+  var WORK_COLS = [
+    { key: 'desc', w: CONTENT_W - 20 - 22, align: 'left', title: 'Work' },
+    { key: 'qty', w: 20, align: 'right', title: 'Qty' },
+    { key: 'unit', w: 22, align: 'left', title: 'Unit' }
+  ];
+  var ORDER_COLS = [
+    { key: 'desc', w: CONTENT_W - 16 - 16 - 27 - 29, align: 'left', title: 'Item' },
+    { key: 'qty', w: 16, align: 'right', title: 'Qty' },
+    { key: 'unit', w: 16, align: 'left', title: 'Unit' },
+    { key: 'cost', w: 27, align: 'right', title: 'Unit cost' },
+    { key: 'total', w: 29, align: 'right', title: 'Cost' }
+  ];
+
+  // Scope of works: the write-up, the client lines as description, quantity and unit, the
+  // hours of labour allowed and the ticked photos. It is never given the cost lines and it
+  // prints no dollar amount of any kind, so it is safe to hand to a trade or a builder.
+  function buildScope(opts) {
+    var d = startDoc(opts, 'Scope of works', 'Scope of works for the job. No prices.');
+    var doc = d.doc, y = d.y, v = opts.version;
+
+    var narrative = String(v.narrative || '').trim();
+    if (narrative) {
+      y = sectionBar(doc, 'What we will do', y);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9.5);
+      doc.setTextColor.apply(doc, BODY);
+      doc.splitTextToSize(narrative, CONTENT_W - 2).forEach(function (ln) {
+        if (y + 4.6 > CONTENT_BOTTOM) y = d.newPage();
+        doc.text(ln, MARGIN + 1, y + 3.5);
+        y += 4.6;
+      });
+      y += 2;
+    }
+
+    var work = L.cleanChargeLines(v.charge_lines);
+    if (work.length) {
+      if (y + 30 > CONTENT_BOTTOM) y = d.newPage();
+      y = sectionBar(doc, 'Work items', y);
+      y = drawTable(doc, y, WORK_COLS, work.map(function (l) { return { desc: l.description, qty: L.qtyText(l.qty), unit: l.unit }; }), d.newPage);
+    }
+
+    if (opts.labourHours > 0) {
+      if (y + 20 > CONTENT_BOTTOM) y = d.newPage();
+      y = sectionBar(doc, 'Labour allowed', y);
+      y = plainLine(doc, L.hoursText(opts.labourHours) + ' of labour allowed for this job.', y, true);
+    }
+
+    photoPages(doc, opts.photos, d.newPage);
+    return finish(doc, d.ref, opts.preparedBy);
+  }
+
+  // Material order list: what to order from each supplier and what it costs us. Material
+  // lines only; labour and Other lines are not on it.
+  function buildMaterials(opts) {
+    var d = startDoc(opts, 'Material order list', 'Internal: our costs, ex GST. Not for the client.');
+    var doc = d.doc, y = d.y;
+    var list = L.materialsBySupplier(opts.costLines);
+    if (!list.line_count) y = plainLine(doc, 'No Material lines on this scope yet.', y + 4);
+    list.groups.forEach(function (g) {
+      if (y + 34 > CONTENT_BOTTOM) y = d.newPage();
+      y = sectionBar(doc, g.supplier, y);
+      y = drawTable(doc, y, ORDER_COLS, g.lines.map(function (l) {
+        return { desc: l.description, qty: L.qtyText(l.qty), unit: l.unit, cost: L.money(l.unit_cost_ex_gst), total: L.money(l.line_total_ex_gst) };
+      }), d.newPage);
+      if (y + 8 > CONTENT_BOTTOM) y = d.newPage();
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(9.5);
+      doc.setTextColor.apply(doc, DARK);
+      doc.text(g.supplier + ' total  ' + L.money(g.total_ex_gst), PAGE_W - MARGIN - 3, y + 3.5, { align: 'right' });
+      y += 7;
+    });
+    if (list.line_count) {
+      if (y + 16 > CONTENT_BOTTOM) y = d.newPage();
+      y += 3;
+      doc.setFillColor.apply(doc, DARK);
+      doc.roundedRect(MARGIN, y, CONTENT_W, 11, 2, 2, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(11);
+      doc.setTextColor(255, 255, 255);
+      doc.text('Materials total (ex GST)', MARGIN + 6, y + 7.2);
+      doc.text(L.money(list.total_ex_gst), PAGE_W - MARGIN - 6, y + 7.2, { align: 'right' });
+      y += 14;
+    }
+    if (list.not_listed) {
+      if (y + 8 > CONTENT_BOTTOM) y = d.newPage();
+      plainLine(doc, notListedText(list.not_listed), y + 2);
+    }
+    return finish(doc, d.ref, opts.preparedBy);
+  }
+
+  function notListedText(n) {
+    return n + ' cost line' + (n > 1 ? 's are' : ' is') + ' not marked Material, so ' + (n > 1 ? 'they are' : 'it is') + ' not on this list.';
   }
 
   window.QBPdf = {
@@ -401,6 +583,25 @@
         catch (e) { missing++; }
       }
       return { blob: build(Object.assign({}, opts, { logo: logo, photos: loaded })), missingPhotos: missing };
-    }
+    },
+    // The scope of works takes the same photos as the quote and never the cost lines; the
+    // caller passes the hours of labour allowed as a plain number.
+    async renderScope(opts) {
+      var logo = await loadLogo();
+      var loaded = [], missing = 0;
+      for (var i = 0; i < (opts.photos || []).length; i++) {
+        var ph = opts.photos[i];
+        try { loaded.push({ caption: ph.caption, img: await loadPhoto(ph.url, 1400) }); }
+        catch (e) { missing++; }
+      }
+      var v = opts.version || {};
+      var clientSide = { title: v.title, narrative: v.narrative, charge_lines: v.charge_lines };
+      return { blob: buildScope(Object.assign({}, opts, { version: clientSide, logo: logo, photos: loaded })), missingPhotos: missing };
+    },
+    // opts.costLines are the internal cost lines: this one is internal, with no photos.
+    async renderMaterials(opts) {
+      return { blob: buildMaterials(Object.assign({}, opts, { logo: await loadLogo() })), missingPhotos: 0 };
+    },
+    notListedText: notListedText
   };
 })();

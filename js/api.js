@@ -113,6 +113,9 @@
       return call('quote_builder_decide_variation', { body: { variation_id: variationId, approved: approved, notes: notes || '' } });
     },
 
+    // Owner and admin logins only; the server refuses anyone else.
+    saveSettings(body) { return call('quote_builder_settings_save', { body: body }); },
+
     // Upload slot, then bytes, then register. Each attempt asks for a fresh slot, so a
     // retry after a dropped connection never collides with a half-finished upload.
     async uploadPhoto(jobId, blob, fileName, caption, takenAt) {

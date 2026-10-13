@@ -124,6 +124,8 @@ test('scope a repair job: costs on top, client charge below, autosave, issue a P
 
 test('signing out with no signal still removes the login from this iPad', async ({ page }) => {
   await signIn(page);
+  // The list is on screen before its job request lands; wait for it, or going offline can beat it.
+  await expect.poll(() => calls('quote_builder_list_jobs').length).toBe(1);
   db.offline = true;
   await page.click('button:has-text("Sign out")');
   await page.click('.modal button:has-text("Sign out")');
@@ -611,11 +613,269 @@ test('a line with a supplier but no description is flagged on screen and blocks 
   await expect(page.locator('.modal')).toContainText('1 line has a price or supplier but no description');
 });
 
+// ---------- Line types, pricing settings, labour, margin target, the two other documents ----------
+// The rate, multiplier and target used here are the fake server's test values.
+
+async function pickType(row, label) { await row.locator('select.type').selectOption({ label }); }
+
+async function capturePdfs(page) {
+  await page.addInitScript(() => {
+    window.__pdfs = [];
+    const make = URL.createObjectURL;
+    URL.createObjectURL = (b) => { if (b && b.type === 'application/pdf') window.__pdfs.push(b); return make.call(URL, b); };
+  });
+}
+
+// The words a PDF actually prints (its text-showing operators), so image bytes cannot match.
+async function lastPdfWords(page, count, saveAs) {
+  await expect.poll(() => page.evaluate(() => window.__pdfs.length), { timeout: 20000 }).toBe(count);
+  const raw = await page.evaluate(async () => new TextDecoder('latin1').decode(await window.__pdfs[window.__pdfs.length - 1].arrayBuffer()));
+  expect(raw.startsWith('%PDF')).toBe(true);
+  if (saveAs) {
+    require('fs').mkdirSync('test-results/shots', { recursive: true });
+    require('fs').writeFileSync(`test-results/shots/${test.info().project.name}-${saveAs}.pdf`, Buffer.from(raw, 'latin1'));
+  }
+  return (raw.match(/\((?:\\.|[^\\()])*\)\s*Tj/g) || []).join('\n');
+}
+
+async function scopeThreeTypes(page) {
+  const cost = page.locator('.line.cost');
+  await typeLine(cost.nth(0), { description: 'Fascia board', qty: 10, unit: 'm', price: 20, supplier: 'Bunnings' });
+  await page.click('button:has-text("+ Add cost line")');
+  await pickType(cost.nth(1), 'Labour');
+  await cost.nth(1).locator('textarea.desc').fill('Carpenter on site');
+  await cost.nth(1).locator('input.num').nth(0).fill('8');
+  await cost.nth(1).locator('input.num').nth(1).fill('50');
+  await cost.nth(1).locator('input.supplier').fill('Dave the chippy');
+  await page.click('button:has-text("+ Add cost line")');
+  await pickType(cost.nth(2), 'Other');
+  await typeLine(cost.nth(2), { description: 'Skip bin hire', qty: 1, unit: 'item', price: 200, supplier: 'Skip hire co' });
+}
+
+test('insurance repair: line types, labour allowed, and Fill from costs priced from the server settings', async ({ page }) => {
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26103")');
+  await expect(page.locator('.pricing-bar')).toContainText('Labour $95.00 an hour');
+  await expect(page.locator('.pricing-bar')).toContainText('Materials at cost × 1.5');
+  await expect(page.locator('.pricing-bar a')).toHaveCount(0);
+
+  await expect(page.locator('.line.cost select.type')).toHaveValue('material');
+  await scopeThreeTypes(page);
+  // Labour is always in hours: the unit is fixed and the quantity is the hours allowed.
+  await expect(page.locator('.line.cost').nth(1).locator('input.unit')).toHaveValue('hr');
+  await expect(page.locator('.line.cost').nth(1).locator('input.unit')).toBeDisabled();
+  await expect(page.locator('.labour-tile')).toContainText('8 hours');
+  await expect(page.locator('.labour-tile')).toContainText('costs us $400.00');
+  await expect(page.locator('.labour-tile')).toContainText('charged $760.00 at $95.00 an hour');
+
+  await page.click('button:has-text("Fill from costs")');
+  await expect(page.locator('.modal')).toContainText('Labour lines: the hours at $95.00 an hour.');
+  await expect(page.locator('.modal')).toContainText('Material lines: our cost × 1.5.');
+  await expect(page.locator('.modal')).toContainText('Other lines (1): the markup below.');
+  await page.locator('.modal input').fill('10');
+  await page.click('.modal button:has-text("Fill")');
+
+  const charge = page.locator('.line.charge');
+  await expect(charge).toHaveCount(3);
+  await expect(charge.nth(0).locator('.line-total')).toHaveText('$300.00');
+  await expect(charge.nth(1).locator('input.unit')).toHaveValue('hr');
+  await expect(charge.nth(1).locator('input.num').nth(1)).toHaveValue('95');
+  await expect(charge.nth(1).locator('.line-total')).toHaveText('$760.00');
+  await expect(charge.nth(2).locator('.line-total')).toHaveText('$220.00');
+  await expect(page.locator('.margin-strip')).toContainText('$1,280.00');
+  await expect(page.locator('.margin-tile')).toContainText('$480.00  (37.5%)');
+
+  await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
+  expect(calls('quote_builder_save').pop().body.cost_lines.map((l) => [l.line_type, l.unit, l.qty])).toEqual([['material', 'm', 10], ['labour', 'hr', 8], ['other', 'item', 1]]);
+  expect(db.versions[0].cost_lines.map((l) => l.line_type)).toEqual(['material', 'labour', 'other']);
+
+  // The saved version carries the types and the hours: they read back the same after a reload.
+  await page.reload();
+  await expect(page.locator('.line.cost select.type').nth(1)).toHaveValue('labour');
+  await expect(page.locator('.labour-tile')).toContainText('8 hours');
+  await page.click('.tab:has-text("History")');
+  await expect(page.locator('table.hist')).toContainText('Labour allowed');
+  await expect(page.locator('table.hist tbody tr')).toContainText('8 hours');
+  await page.click('table.hist a:has-text("Scope v1")');
+  await expect(page.locator('.compare .internal')).toContainText('Labour');
+  await expect(page.locator('.labour-tile')).toContainText('costs us $400.00');
+});
+
+test('fill with only Material and Labour lines asks for no markup', async ({ page }) => {
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26103")');
+  await typeLine(page.locator('.line.cost').nth(0), { description: 'Fascia board', qty: 2, unit: 'm', price: 30, supplier: 'Bunnings' });
+  await page.click('button:has-text("Fill from costs")');
+  await expect(page.locator('.modal')).toContainText('Material lines: our cost × 1.5.');
+  await expect(page.locator('.modal input')).toHaveCount(0);
+  await page.click('.modal button:has-text("Fill")');
+  await expect(page.locator('.line.charge .line-total')).toHaveText('$90.00');
+});
+
+test('a setting that is not set falls back to the markup question and says which one is missing', async ({ page }) => {
+  db.settings.labour_rate_ex_gst = null;
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26103")');
+  await expect(page.locator('.pricing-bar')).toContainText('Labour rate not set');
+  await scopeThreeTypes(page);
+  await expect(page.locator('.labour-tile')).toContainText('costs us $400.00');
+  await expect(page.locator('.labour-tile')).not.toContainText('charged');
+  await page.click('button:has-text("Fill from costs")');
+  await expect(page.locator('.modal')).toContainText('The labour rate is not set, so Labour lines use the markup below.');
+  await page.locator('.modal input').fill('20');
+  await page.click('.modal button:has-text("Fill")');
+  const charge = page.locator('.line.charge');
+  await expect(charge.nth(0).locator('.line-total')).toHaveText('$300.00');
+  await expect(charge.nth(1).locator('.line-total')).toHaveText('$480.00');
+  await expect(charge.nth(2).locator('.line-total')).toHaveText('$240.00');
+});
+
+test('margin target: no pass or fail while none is set; red below a set target with what to charge', async ({ page }) => {
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26103")');
+  await typeLine(page.locator('.line.cost').nth(0), { description: 'Fascia board', qty: 1, unit: 'm', price: 100, supplier: 'Bunnings' });
+  await typeLine(page.locator('.line.charge').nth(0), { description: 'Replace fascia', qty: 1, unit: 'item', price: 105 });
+  await expect(page.locator('.margin-tile')).toContainText('$5.00  (4.8%)');
+  await expect(page.locator('.margin-tile')).toContainText('No target margin set');
+  await expect(page.locator('.margin-tile')).not.toHaveClass(/warn/);
+  await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
+
+  db.settings.target_margin_pct = 35;
+  await page.reload();
+  await expect(page.locator('.margin-tile')).toHaveClass(/warn/);
+  await expect(page.locator('.margin-tile')).toContainText('To hit 35%, charge $153.85 ex GST');
+  await page.locator('.line.charge input.num').nth(1).fill('160');
+  await expect(page.locator('.margin-tile')).toContainText('On the 35% target');
+  await expect(page.locator('.margin-tile')).not.toHaveClass(/warn/);
+});
+
+test('a server that sends no settings yet: the quote screen works exactly as it did', async ({ page }) => {
+  db.settings = undefined;
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26103")');
+  await expect(page.locator('.line.cost')).toHaveCount(1);
+  await expect(page.locator('select.type')).toHaveCount(0);
+  await expect(page.locator('.pricing-bar')).toHaveCount(0);
+  await expect(page.locator('.labour-tile')).toHaveCount(0);
+  await expect(page.locator('button:has-text("Material order list")')).toHaveCount(0);
+  await expect(page.locator('button:has-text("Scope of works (no prices)")')).toHaveCount(1);
+  await typeLine(page.locator('.line.cost').nth(0), { description: 'Fascia board', qty: 1, unit: 'hr', price: 100, supplier: 'Bunnings' });
+  await page.click('button:has-text("Fill from costs + markup")');
+  await expect(page.locator('.modal')).toContainText('at this markup');
+  await page.locator('.modal input').fill('10');
+  await page.click('.modal button:has-text("Fill")');
+  await expect(page.locator('.line.charge .line-total')).toHaveText('$110.00');
+  // Below 15 percent is still red, and nothing mentions a target.
+  await expect(page.locator('.margin-tile')).toHaveClass(/warn/);
+  await expect(page.locator('.margin-tile')).not.toContainText('target');
+  await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
+  expect(db.versions[0].cost_lines[0]).not.toHaveProperty('line_type');
+});
+
+test('private quote: line types and labour show, but Fill keeps the one markup question', async ({ page }) => {
+  db.jobs.push({ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', job_number: 'SWM-26000', type: 'miscellaneous', status: 'draft', repair_stage: null, client_name: 'Jane Citizen', client_phone: '', client_email: '',
+    site_address: '5 Sample Rd', site_suburb: 'Bayswater', category: 'private_renovation', created_at: new Date().toISOString() });
+  await signIn(page);
+  await page.click('button:has-text("Private quotes")');
+  await page.click('.job-card:has-text("SWM-26000")');
+  await expect(page.locator('.pricing-bar')).toHaveCount(0);
+  await scopeThreeTypes(page);
+  await expect(page.locator('.labour-tile')).toContainText('8 hours');
+  await expect(page.locator('.labour-tile')).not.toContainText('charged');
+  await page.click('button:has-text("Fill from costs + markup")');
+  await expect(page.locator('.modal')).toContainText('at this markup');
+  await page.locator('.modal input').fill('30');
+  await page.click('.modal button:has-text("Fill")');
+  await expect(page.locator('.line.charge .line-total')).toHaveText(['$260.00', '$520.00', '$260.00']);
+});
+
+test('scope of works has no dollar amount; material order list has Material lines by supplier and nothing else', async ({ page }) => {
+  await capturePdfs(page);
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26103")');
+  await scopeThreeTypes(page);
+  await page.click('button:has-text("+ Add cost line")');
+  await typeLine(page.locator('.line.cost').nth(3), { description: 'Colorbond gutter', qty: 6, unit: 'lm', price: 12.5, supplier: 'Stratco' });
+  await page.fill('.title-input', 'Storm damage repairs');
+  await page.fill('textarea.narrative', 'Replace damaged fascia to the rear eave and make good.');
+  await page.click('button:has-text("Fill from costs")');
+  await page.locator('.modal input').fill('10');
+  await page.click('.modal button:has-text("Fill")');
+  await page.evaluate(() => { window.open = () => null; });
+
+  await page.click('button:has-text("Scope of works (no prices)")');
+  const scope = await lastPdfWords(page, 1, 'scope-of-works');
+  for (const want of ['Scope of works', 'Storm damage repairs', 'Replace damaged fascia to the rear eave', 'Fascia board', 'Carpenter on site', '8 hours of labour allowed', 'SWR-26103', 'MLB-27100']) expect(scope).toContain(want);
+  expect(scope).not.toContain('$');
+  for (const secret of ['Bunnings', 'Stratco', 'Dave the chippy', 'Skip hire co']) expect(scope).not.toContain(secret);
+
+  await page.click('button:has-text("Material order list")');
+  await expect(page.locator('.toast')).toContainText('1 cost line is not marked Material, so it is not on this list.');
+  const list = await lastPdfWords(page, 2, 'material-order-list');
+  for (const want of ['Material order list', 'Not for the client', 'Bunnings', 'Fascia board', '$20.00', '$200.00', 'Stratco', 'Colorbond gutter', '$12.50', '$75.00', 'Materials total', '$275.00', '1 cost line is not marked Material']) expect(list).toContain(want);
+  expect(list.indexOf('Bunnings')).toBeLessThan(list.indexOf('Stratco'));
+  // No labour, no Other line, and none of the prices the client is charged.
+  for (const secret of ['Carpenter on site', 'Dave the chippy', 'Skip bin hire', 'Skip hire co', '$30.00', '$95.00', '$18.75', '$760.00']) expect(list).not.toContain(secret);
+
+  // The same two documents open from a saved version in History.
+  await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
+  await page.click('.tab:has-text("History")');
+  await page.click('table.hist a:has-text("Scope v1")');
+  await page.evaluate(() => { window.open = () => null; });
+  await page.click('button:has-text("Material order list")');
+  expect(await lastPdfWords(page, 3)).toContain('$275.00');
+});
+
+test('pricing settings: an ops manager cannot change them; an owner or admin can, for everyone', async ({ page }) => {
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26103")');
+  await expect(page.locator('.pricing-bar')).toContainText('Labour $95.00 an hour');
+  await expect(page.locator('a:has-text("Change")')).toHaveCount(0);
+  const jobUrl = page.url();
+  await page.goto(jobUrl + '/settings');
+  await expect(page.locator('.form-card')).toContainText('Only the owner or an admin login can change the pricing settings.');
+  await expect(page.locator('.form-card input')).toHaveCount(0);
+
+  db.canEditSettings = true;
+  await page.goto(jobUrl);
+  await page.click('.pricing-bar a:has-text("Change")');
+  await expect(page.locator('#set-rate')).toHaveValue('95');
+  await expect(page.locator('#set-mult')).toHaveValue('1.5');
+  await expect(page.locator('#set-target')).toHaveValue('');
+  await page.fill('#set-mult', '0.5');
+  await page.click('button:has-text("Save settings")');
+  await expect(page.locator('.form-error')).toHaveText('Materials multiplier must be from 1 to 10.');
+  expect(calls('quote_builder_settings_save')).toHaveLength(0);
+  await page.fill('#set-rate', '110');
+  await page.fill('#set-mult', '1.4');
+  await page.fill('#set-target', '30');
+  await page.click('button:has-text("Save settings")');
+  await expect(page.locator('.pricing-bar')).toContainText('Labour $110.00 an hour');
+  await expect(page.locator('.pricing-bar')).toContainText('Materials at cost × 1.4');
+  expect(calls('quote_builder_settings_save').pop().body).toEqual({ labour_rate_ex_gst: 110, materials_multiplier: 1.4, target_margin_pct: 30 });
+  expect(db.settings).toEqual({ labour_rate_ex_gst: 110, materials_multiplier: 1.4, target_margin_pct: 30 });
+});
+
+test('issuing says what it did to the job value when the server reports it', async ({ page }) => {
+  db.reportJobValue = true;
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26103")');
+  await typeLine(page.locator('.line.charge').nth(0), { description: 'Replace fascia', qty: 1, unit: 'item', price: 650 });
+  await page.click('button:has-text("Issue client quote")');
+  await page.click('.modal button:has-text("Issue")');
+  await expect(page.locator('.modal h2')).toHaveText('Issued SWR-26103-Q1', { timeout: 20000 });
+  await expect(page.locator('.modal')).toContainText('Job value set to $715.00 inc GST.');
+});
+
 test('screens render at iPad size (screenshots for review)', async ({ page }, info) => {
   await signIn(page);
   await page.screenshot({ path: `test-results/shots/${info.project.name}-list.png`, fullPage: true });
   await page.click('.job-card:has-text("SWR-26101")');
   await typeLine(page.locator('.line.cost').nth(0), { description: 'Remove and dispose damaged fascia', qty: 12.5, unit: 'm', price: 18, supplier: 'Bunnings' });
+  await page.click('button:has-text("+ Add cost line")');
+  await pickType(page.locator('.line.cost').nth(1), 'Labour');
+  await page.locator('.line.cost').nth(1).locator('textarea.desc').fill('Carpenter on site');
+  await page.locator('.line.cost').nth(1).locator('input.num').nth(0).fill('8');
   await typeLine(page.locator('.line.charge').nth(0), { description: 'Replace fascia, 12.5 m, supply and install', qty: 1, unit: 'item', price: 650 });
   await page.screenshot({ path: `test-results/shots/${info.project.name}-scope.png`, fullPage: true });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
