@@ -1,13 +1,13 @@
 'use strict';
 const { test, expect } = require('@playwright/test');
 const { seed, install } = require('./fake-backend');
+const { pdfWords, squash } = require('./pdf-text');
 
 let db;
 
 test.beforeEach(async ({ page }) => {
   db = seed();
   await install(page, db);
-  await page.addInitScript(() => { window.QB_PDF_PLAIN = true; });
   page.on('pageerror', (e) => { throw e; });
 });
 
@@ -89,10 +89,10 @@ test('scope a repair job: costs on top, client charge below, autosave, issue a P
   await page.click('.modal button:has-text("OK")');
 
   const pdfKey = Object.keys(db.files).find((k) => k.startsWith('job-pdfs/'));
-  const pdf = db.files[pdfKey].body.toString('latin1');
+  const pdf = await pdfWords(db.files[pdfKey].body);
   require('fs').mkdirSync('test-results/shots', { recursive: true });
   require('fs').writeFileSync(`test-results/shots/${test.info().project.name}-quote.pdf`, db.files[pdfKey].body);
-  expect(pdf.startsWith('%PDF')).toBe(true);
+  expect(db.files[pdfKey].body.subarray(0, 4).toString('latin1')).toBe('%PDF');
   expect(db.files[pdfKey].type).toBe('application/pdf');
   expect(pdf).toContain('SWR-26101-Q1');
   expect(pdf).toContain('Replace fascia, 12.5 m, supply and install');
@@ -101,7 +101,9 @@ test('scope a repair job: costs on top, client charge below, autosave, issue a P
   expect(pdf).toContain('Prepared by Hugo Tester');
   expect(pdf).toContain('This quote is valid for 30 days');
   // No licence or insurance claim prints until the owner supplies the wording.
+  // The labels are letter-spaced, so the squashed text is checked as well.
   expect(pdf).not.toMatch(/licen[cs]ed|insured/i);
+  expect(squash(pdf)).not.toMatch(/licen[cs]ed|insured/);
   // Internal costs never reach the client PDF.
   for (const secret of ['Remove and dispose damaged fascia', 'Carpenter labour', 'Bunnings', 'Dave the chippy', '$485.00']) expect(pdf).not.toContain(secret);
 
@@ -177,7 +179,7 @@ test('a quantity with 3 decimals prints as typed, so the row multiplies out on t
   await expect(page.locator('.modal h2')).toHaveText('Issued SWR-26103-Q1', { timeout: 20000 });
   await page.click('.modal button:has-text("OK")');
 
-  const pdf = db.files[Object.keys(db.files).find((k) => k.startsWith('job-pdfs/'))].body.toString('latin1');
+  const pdf = await pdfWords(db.files[Object.keys(db.files).find((k) => k.startsWith('job-pdfs/'))].body);
   expect(pdf).toContain('(2.375)');
   expect(pdf).not.toContain('(2.38)');
   expect(pdf).toContain('$23.75');
@@ -598,8 +600,43 @@ test('a late load of the same job does not replace the open editor\'s job data: 
   await expect(page.locator('.modal h2')).toHaveText('Issued SWR-26102-Q1', { timeout: 20000 });
 
   expect(db.versions[0].photo_media_ids).toEqual([db.photos[0].id]);
-  const pdf = db.files[Object.keys(db.files).find((k) => k.startsWith('job-pdfs/'))].body.toString('latin1');
+  const pdf = await pdfWords(db.files[Object.keys(db.files).find((k) => k.startsWith('job-pdfs/'))].body);
   expect(pdf).toContain('Site photos');
+});
+
+test('a quote font that will not load stops the preview and the issue: no PDF is made, uploaded or frozen', async ({ page }) => {
+  await capturePdfs(page);
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26103")');
+  await typeLine(page.locator('.line.charge').nth(0), { description: 'Replace fascia', qty: 1, unit: 'item', price: 650 });
+  await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
+
+  let fontDown = true;
+  await page.route('**/assets/fonts/PlusJakartaSans-ExtraBold.ttf', (route) => fontDown ? route.fulfill({ status: 404 }) : route.fallback());
+  await page.evaluate(() => { window.open = () => null; });
+
+  await page.click('button:has-text("Preview client PDF")');
+  await expect(page.locator('.toast')).toHaveText('Could not make the PDF: The quote font could not be loaded. Check your signal and try again.', { timeout: 20000 });
+  expect(await page.evaluate(() => window.__pdfs.length)).toBe(0);
+
+  await page.click('button:has-text("Issue client quote")');
+  await page.click('.modal button:has-text("Issue")');
+  await expect(page.locator('.modal h2')).toHaveText('Not issued', { timeout: 20000 });
+  await expect(page.locator('.modal')).toContainText('The quote font could not be loaded. Check your signal and try again.');
+  await page.click('.modal button:has-text("OK")');
+  expect(await page.evaluate(() => window.__pdfs.length)).toBe(0);
+  expect(Object.keys(db.files).filter((k) => k.startsWith('job-pdfs/'))).toHaveLength(0);
+  expect(calls('quote_builder_issue')).toHaveLength(0);
+  expect(db.versions[0].status).toBe('draft');
+  expect(db.documents).toHaveLength(0);
+
+  // The font loads again: trying again issues the quote, in the template's typeface.
+  fontDown = false;
+  await page.click('button:has-text("Issue client quote")');
+  await page.click('.modal button:has-text("Issue")');
+  await expect(page.locator('.modal h2')).toHaveText('Issued SWR-26103-Q1', { timeout: 20000 });
+  const issued = db.files[Object.keys(db.files).find((k) => k.startsWith('job-pdfs/'))].body;
+  expect(issued.toString('latin1')).toContain('PlusJakartaSans');
 });
 
 test('a line with a supplier but no description is flagged on screen and blocks issuing', async ({ page }) => {
@@ -626,16 +663,22 @@ async function capturePdfs(page) {
   });
 }
 
-// The words a PDF actually prints (its text-showing operators), so image bytes cannot match.
+// The words a PDF actually prints, each piece as "(text)" on its own line, so image bytes cannot match.
 async function lastPdfWords(page, count, saveAs) {
   await expect.poll(() => page.evaluate(() => window.__pdfs.length), { timeout: 20000 }).toBe(count);
-  const raw = await page.evaluate(async () => new TextDecoder('latin1').decode(await window.__pdfs[window.__pdfs.length - 1].arrayBuffer()));
-  expect(raw.startsWith('%PDF')).toBe(true);
+  const b64 = await page.evaluate(async () => {
+    const buf = new Uint8Array(await window.__pdfs[window.__pdfs.length - 1].arrayBuffer());
+    let s = '';
+    for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);
+    return btoa(s);
+  });
+  const bytes = Buffer.from(b64, 'base64');
+  expect(bytes.subarray(0, 4).toString('latin1')).toBe('%PDF');
   if (saveAs) {
     require('fs').mkdirSync('test-results/shots', { recursive: true });
-    require('fs').writeFileSync(`test-results/shots/${test.info().project.name}-${saveAs}.pdf`, Buffer.from(raw, 'latin1'));
+    require('fs').writeFileSync(`test-results/shots/${test.info().project.name}-${saveAs}.pdf`, bytes);
   }
-  return (raw.match(/\((?:\\.|[^\\()])*\)\s*Tj/g) || []).join('\n');
+  return pdfWords(bytes);
 }
 
 async function scopeThreeTypes(page) {
@@ -821,6 +864,7 @@ test('scope of works prints the client lines with their quantities, no dollar am
   // Nothing from the cost table: no Labour allowed section, not its 8 hours, no dollar amount, no supplier.
   expect(scope).not.toContain('$');
   expect(scope.toLowerCase()).not.toContain('labour allowed');
+  expect(squash(scope)).not.toContain('labourallowed');
   expect(scope).not.toContain('8 hours');
   expect(cells).not.toContain('8');
   for (const secret of ['Bunnings', 'Stratco', 'Dave the chippy', 'Skip hire co']) expect(scope).not.toContain(secret);
