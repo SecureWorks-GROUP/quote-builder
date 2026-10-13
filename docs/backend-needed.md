@@ -11,7 +11,7 @@ The switch is one field: `settings` on the `quote_builder_get_job` response.
 | Server sends | The app does |
 |---|---|
 | No `settings` key (today's server) | Works exactly as before: no Type column, no pricing bar, no Labour allowed, one markup question, red below 15 percent, no Material order list button. Only the "Scope of works (no prices)" button is new. |
-| `settings` present | Line types, the pricing bar, Labour allowed, pricing from the settings, the margin target and the Material order list all turn on. |
+| `settings` present | Line types, the read-only pricing bar, Labour allowed, pricing from the settings, the margin target (section 2f) and the Material order list all turn on. |
 
 So the server must ship `settings` and line type storage (section 2) in the same deploy. If `settings` arrives while `line_type` is still dropped on save, every line reads back as Other after a reload.
 
@@ -19,18 +19,17 @@ The app sends `line_type` on every cost line today. Today's server ignores it, w
 
 ## 2. Slice 1: what the app calls and expects
 
-### 2a. `GET quote_builder_get_job`: two new fields
+### 2a. `GET quote_builder_get_job`: one new field
 
 ```json
 {
-  "settings": { "labour_rate_ex_gst": 0, "materials_multiplier": 0, "target_margin_pct": null },
-  "can_edit_settings": false
+  "settings": { "labour_rate_ex_gst": 0, "materials_multiplier": 0, "target_margin_pct": null }
 }
 ```
 
 - Each setting is a number, or `null` when it has no row or is not a number. No fallback numbers on the server either.
 - The app treats a value that is not above zero as not set. `target_margin_pct` must be above 0 and below 100 to count.
-- `can_edit_settings`: true for `admin` and `owner`. It only decides whether the app shows the Change link and the form; the save action must check the role again.
+- The app only reads the settings. It shows the rate and the multiplier on the quote screen and never writes them (section 2c).
 - A rate or multiplier that is `null` is not an error. The app prices that line type through the old markup question and tells the user which setting is missing.
 
 ### 2b. Cost lines: `line_type`
@@ -46,17 +45,13 @@ Sent on every cost line in `quote_builder_save`, and expected back on every cost
 - A Labour line always arrives with `unit: "hr"`; its `qty` is the hours allowed and `unit_cost_ex_gst` is what an hour costs us.
 - Totals do not change. Labour allowed is worked out in the app when shown: hours and cost from lines with `line_type = labour`.
 
-### 2c. `POST quote_builder_settings_save` (new)
+### 2c. Changing the settings: nothing in the app
 
-```json
-{ "labour_rate_ex_gst": 0, "materials_multiplier": 0, "target_margin_pct": null }
-```
+The app has no settings page and calls no settings save action. The numbers are set on the server (the seed in section 2d, then `org_config`) and the app shows them read-only.
 
-- The app always sends all three. `target_margin_pct: null` means no target (delete the row).
-- The app only sends: rate above 0 up to 1000, multiplier 1 to 10, target above 0 up to 95 or `null`. The server should still check.
-- `403` with `code: "operator_access_required"` for any role but `admin` and `owner`.
-- Any `200` is success. The app reads nothing from the reply; it reloads the job and takes `settings` from `quote_builder_get_job`.
-- Whether an ops manager login may change the settings is the owner's call. The app follows `can_edit_settings`, so that answer is a server change only.
+- The app does not call `quote_builder_settings_save` and does not read `can_edit_settings`. Neither is needed for this app.
+- Who may change the numbers is owner question Q3 (section 7), still open. An in-app editor, if the owner wants one, is a later change on both sides.
+- A changed number reaches the app the next time a job is opened. It applies the next time Fill from costs is used; quotes already filled or issued keep their prices.
 
 ### 2d. Storage and seed
 
@@ -74,21 +69,19 @@ Fill from costs on a repair job makes one client line per cost line:
 
 Private quotes ignore the settings and use the one markup percent for every line.
 
+### 2f. The margin warning
+
+| `target_margin_pct` | The Margin tile |
+|---|---|
+| A number above 0 and below 100 | Red below the target, with what to charge to reach it. At or above it: "On the N% target". |
+| `null` | Red below 15 percent, as before, with the note "No target margin set". |
+| No `settings` key | Red below 15 percent, as before, with no note. |
+
+A loss is red in every case. The app never invents a target: the only target is the one the server sends.
+
 ## 3. Slice 3: the job value on issue
 
-All back end. The app only reads one optional field on the replies of `quote_builder_issue` and `quote_builder_decide_variation`:
-
-```json
-{ "job_value": { "written": true, "total_inc_gst": 715.00 } }
-{ "job_value": { "written": false, "reason": "priced_by_another_tool" } }
-```
-
-| Reply | The app says |
-|---|---|
-| `written: true` | "Job value set to $X inc GST." |
-| `reason: "priced_by_another_tool"` | "Job value not changed: this job is priced by another tool." |
-| `reason: "write_failed"` | "Job value could not be set just now. The quote is still issued." |
-| `reason: "nothing_issued"`, or no `job_value` | nothing |
+All back end. The app reads nothing about the job value and shows no job value message: it ignores any `job_value` field on the replies of `quote_builder_issue` and `quote_builder_decide_variation`. A message on issue is a later app change, once the server sends the field.
 
 The value is a calculated column, so the server writes `jobs.pricing_json` behind the guard in the build note (only when it is empty or already carries `"source": "quote_builder"`). None of that is in this repo.
 
@@ -118,7 +111,7 @@ The owner's words ask that the quote, the scope of works and the material order 
 |---|---|
 | Client quote PDF | Yes, as its own job document (unchanged). |
 | Scope text, cost lines with type and supplier, labour hours | Yes, in the saved version (types and hours once section 2b is live). |
-| Scope of works PDF, material order list PDF | No. They are made on the iPad from the saved version, on demand, from the quote screen or any version in History. |
+| Scope of works PDF, material order list PDF | No. They are made on the iPad from the open scope or variation, on demand, from the quote screen only. |
 
 Filing those two PDFs as job documents needs the back end, because the server hands out one upload slot per version and files one document on issue. If the owner wants them filed, a proposal:
 
@@ -133,10 +126,9 @@ This is a proposal, not something the app calls today.
 |---|---|---|
 | Material order list prints no costs | It prints our unit cost and line cost, and is marked internal, not for the client | The task brief lists the list's columns as item, quantity, supplier, cost. |
 | Labour allowed shows hours and our cost | It shows hours, our cost, and on a repair job what the hours are charged at | The task brief asks for the labour amount allowed at the hourly rate. |
-| With no target, red below 15 percent as today | On a repair job with settings on and no target: no red below 15, and the note "No target margin set". Private quotes keep the 15 percent rule. A loss is still red everywhere. | The task brief says to show the margin with no pass or fail mark until a target is agreed. |
-| Settings page at `#/settings` | `#/job/<id>/settings`, reached from Change on the pricing bar | The settings and `can_edit_settings` arrive on the job, so the page needs a job to load them. |
+| Settings page and a settings save action | Neither. The rate and the multiplier show read-only on the quote screen | The numbers are set on the server. Who may change them is owner question Q3, still open. |
+| Issuing and deciding a variation say what happened to the job value | The app says nothing about the job value | The server does not send it yet (section 3). |
 | Material list says "N cost lines have no type" | It says how many cost lines are not marked Material because they are Other or have no type | An untyped line becomes Other the moment its draft opens, so the two cannot be told apart on screen. |
-| Scope of works: client lines and photos | The same, plus one line with the total hours of labour allowed | The hours are the labour allowance for the job. It is given the number only, never the cost lines. |
 
 ## 7. Owner questions the app did not answer
 
@@ -144,10 +136,10 @@ Built on the build note's own defaults; none blocks the app.
 
 | Question | What the app does until answered |
 |---|---|
-| Q1 target margin | Shows the margin with "No target margin set". Uses a target the moment the server sends one. |
+| Q1 target margin | Keeps the red warning below 15 percent and says "No target margin set". Uses a target the moment the server sends one. |
 | Q2 cost of an hour of labour | Hugo types it per Labour line. With it blank, the margin reads high. |
-| Q3 who may change the settings | Follows `can_edit_settings` from the server. |
+| Q3 who may change the settings | Open. Nobody can change them in the app: there is no in-app editor. They are set on the server. |
 | Q4 one pair of numbers or one per builder | One pair, whatever the server sends for the job. A per-builder pair would be a server change to what `settings` returns for that job. |
 | Q5 job values for quotes issued earlier | Nothing. Back end and owner. |
-| Q6 may a trade see labour dollars | The scope of works shows hours only. |
+| Q6 may a trade see labour dollars | Open, for the later crew work order (section 4). The scope of works can go to a builder or a trade, so it shows no labour dollars and no hours allowed. The hours allowed stay on the quote screen and in History. |
 | Q7 rule for Other lines | The old markup question. |

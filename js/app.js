@@ -5,7 +5,6 @@
 //   #/job/<id>/variations   the job's variations
 //   #/job/<id>/var/<ref>    one variation (ref is its chain id, or new-<local id> before first save)
 //   #/job/<id>/history      every version: what was allowed against what was quoted
-//   #/job/<id>/settings     pricing settings (owner and admin logins only)
 //   #/job/<id>/v/<id>       one version, read only
 (function () {
   'use strict';
@@ -445,8 +444,7 @@
       append(wrap, el('div', { class: 'pricing-bar' },
         el('strong', { text: 'Insurance pricing' }),
         el('span', { class: settings.labour_rate_ex_gst ? '' : 'unset', text: rateText(settings) }),
-        el('span', { class: settings.materials_multiplier ? '' : 'unset', text: multiplierText(settings) }),
-        b.can_edit_settings ? el('a', { class: 'btn btn-ghost', href: '#/job/' + ed.job.id + '/settings', text: 'Change' }) : null));
+        el('span', { class: settings.materials_multiplier ? '' : 'unset', text: multiplierText(settings) })));
     }
     ed.dom.margin = el('div', { class: 'margin-strip' });
     append(wrap, ed.dom.margin);
@@ -629,12 +627,11 @@
   }
 
   // The strip of figures between the two tables. With a target margin set, the margin goes
-  // red below it and says what to charge to reach it. On an
-  // insurance repair with no target agreed, the margin carries no pass or fail mark. Anywhere
-  // the server sends no settings, it is red below 15 percent as it always was.
+  // red below it and says what to charge to reach it. With no target set, it is red below
+  // 15 percent as it always was.
   function marginTiles(t, costLines, settings, repair) {
     var target = settings ? settings.target_margin_pct : null;
-    var low = t.margin_pct != null && (target != null ? t.margin_pct < target : !(settings && repair) && t.margin_pct < 15);
+    var low = t.margin_pct != null && t.margin_pct < (target != null ? target : 15);
     var tiles = [el('div', null, el('span', { text: 'Allowed (cost)' }), el('strong', { text: L.money(t.cost_total_ex_gst) }))];
     if (settings) {
       var lab = L.labourAllowed(costLines, repair ? settings.labour_rate_ex_gst : null);
@@ -958,7 +955,7 @@
     var qn = function () { return ed.locked && ed.latest && ed.latest.quote_number ? ed.latest.quote_number : 'DRAFT'; };
     append(box,
       el('button', { class: 'btn', text: 'Preview client PDF', onclick: function () { previewPdf(b, ed); } }),
-      docButtons(b, function () { return pdfOpts(b, ed, qn()); }, function () { return ed.draft.cost_lines; }),
+      docButtons(b, ed, qn),
       ed.locked ? null : el('button', { class: 'btn btn-primary btn-big', text: ed.kind === 'variation' ? 'Issue variation quote' : 'Issue client quote', onclick: function () { issue(b, ed); } }));
     append(box, el('p', { class: 'muted small', text: 'Issuing freezes this version, saves the PDF on the job' + (b.job.type === 'miscellaneous' ? '' : ' and moves the Repairs board card') + '. Nothing is emailed or texted to anyone.' }));
   }
@@ -966,16 +963,15 @@
   // The two other documents a scope makes. Both open on the iPad like the preview; neither
   // is filed, emailed or sent. The material order list needs line types, so it only shows
   // when the server sends the settings.
-  function docButtons(b, opts, costLines) {
+  function docButtons(b, ed, qn) {
     return [
       el('button', { class: 'btn', text: 'Scope of works (no prices)', onclick: function () {
-        var o = opts();
-        o.labourHours = settingsOf(b) ? L.labourAllowed(costLines()).hours : 0;
+        var o = pdfOpts(b, ed, qn());
         openPdf(function () { return window.QBPdf.renderScope(o); }, (b.job.job_number || 'job') + '-scope-of-works.pdf', 'scope of works');
       } }),
       settingsOf(b) ? el('button', { class: 'btn', text: 'Material order list', onclick: function () {
-        var o = opts();
-        o.costLines = costLines();
+        var o = pdfOpts(b, ed, qn());
+        o.costLines = ed.draft.cost_lines;
         var left = L.materialsBySupplier(o.costLines).not_listed;
         if (left) toast(window.QBPdf.notListedText(left), 'warn');
         openPdf(function () { return window.QBPdf.renderMaterials(o); }, (b.job.job_number || 'job') + '-material-order-list.pdf', 'material order list');
@@ -1066,7 +1062,6 @@
       await modal({ title: 'Issued ' + (result.document && result.document.quote_number || ''), body: el('div', null,
         el('p', { text: 'The PDF is saved on the job as its own document.' }),
         stageMsg ? el('p', { text: stageMsg }) : null,
-        jobValueText(result.job_value) ? el('p', { text: jobValueText(result.job_value) }) : null,
         result.document && result.document.url ? el('p', null, el('a', { class: 'btn', href: result.document.url, target: '_blank', rel: 'noopener', text: 'Open the PDF' })) : null) });
       ed.closed = true;
       state.editor = null;
@@ -1084,15 +1079,6 @@
     if (s.moved) return 'Repairs board: moved from ' + L.stageLabel(s.from) + ' to ' + L.stageLabel(s.to) + '.';
     if (s.reason === 'already_past_stage') return 'Repairs board: card left where it is (already further along).';
     if (s.reason === 'stage_write_failed') return 'Repairs board: the card could not be moved just now. The quote is issued; move the card on the board.';
-    return '';
-  }
-
-  // What issuing did to the job's value. A server that does not report it says nothing.
-  function jobValueText(v) {
-    if (!v) return '';
-    if (v.written) return 'Job value set to ' + L.money(v.total_inc_gst) + ' inc GST.';
-    if (v.reason === 'priced_by_another_tool') return 'Job value not changed: this job is priced by another tool.';
-    if (v.reason === 'write_failed') return 'Job value could not be set just now. The quote is still issued.';
     return '';
   }
 
@@ -1139,7 +1125,7 @@
     if (!ok) return;
     try {
       var r = await api.decideVariation(chain.variation_id, approved, notes.value);
-      toast((approved ? 'Recorded as approved. ' : 'Recorded as rejected. ') + [stageText(r.stage), jobValueText(r.job_value)].filter(Boolean).join(' '));
+      toast((approved ? 'Recorded as approved. ' : 'Recorded as rejected. ') + stageText(r.stage));
       rerender();
     } catch (e) { modal({ title: 'Not recorded', body: errorText(e) }); }
   }
@@ -1183,7 +1169,6 @@
     (b.variations || []).forEach(function (c) { c.versions.forEach(function (x) { if (x.id === versionId) { v = x; label = c.variation_number ? 'Variation ' + c.variation_number : 'Variation'; } }); });
     if (!v) { append(main, el('p', { class: 'banner banner-error', text: 'Version not found.' })); return; }
     var settings = settingsOf(b);
-    var kind = label === 'Scope' ? 'scope' : 'variation';
     var costRows = (v.cost_lines || []).map(function (l) {
       return el('tr', null, el('td', { text: l.description }), settings ? el('td', { text: L.lineTypeLabel(L.lineType(l)) }) : null,
         el('td', { class: 'r', text: L.qtyText(l.qty) + ' ' + (l.unit || '') }),
@@ -1209,10 +1194,6 @@
         el('div', null, el('span', { text: 'Quoted (ex GST)' }), el('strong', { text: L.money(v.charge_total_ex_gst) })),
         el('div', null, el('span', { text: 'Quoted (inc GST)' }), el('strong', { text: L.money(v.charge_total_inc_gst) })),
         el('div', { class: v.margin_ex_gst < 0 ? 'warn' : '' }, el('span', { text: 'Margin' }), el('strong', { text: L.money(v.margin_ex_gst) + (v.margin_pct != null ? ' (' + Number(v.margin_pct).toFixed(1) + '%)' : '') }))),
-      el('div', { class: 'row-actions doc-actions' }, docButtons(b, function () {
-        return { job: b.job, kind: kind, version: v, quoteNumber: v.quote_number || 'DRAFT', preparedBy: preparedBy(),
-          photos: (b.photos || []).filter(function (p) { return (v.photo_media_ids || []).indexOf(p.id) !== -1; }).map(function (p) { return { url: p.url, caption: p.caption || '' }; }) };
-      }, function () { return v.cost_lines || []; })),
       el('div', { class: 'compare' },
         el('section', { class: 'card internal' }, el('h2', { text: 'Allowed: what it costs us' }),
           el('div', { class: 'table-scroll' }, el('table', { class: 'hist' }, el('thead', null, el('tr', null, el('th', { text: 'Description' }), settings ? el('th', { text: 'Type' }) : null, el('th', { class: 'r', text: 'Qty' }), el('th', { class: 'r', text: 'Unit cost' }), el('th', { text: 'Supplier' }), el('th', { class: 'r', text: 'Total' }))), el('tbody', null, costRows)))),
@@ -1220,49 +1201,6 @@
           el('div', { class: 'table-scroll' }, el('table', { class: 'hist' }, el('thead', null, el('tr', null, el('th', { text: 'Description' }), el('th', { class: 'r', text: 'Qty' }), el('th', { class: 'r', text: 'Unit price' }), el('th', { text: '' }), el('th', { class: 'r', text: 'Total' }))), el('tbody', null, chargeRows))))),
       photos.length ? el('section', { class: 'card' }, el('h2', { text: 'Photos on this version' }),
         el('div', { class: 'photo-grid' }, photos.map(function (p) { return el('div', { class: 'photo on' }, el('img', { src: p.url, alt: p.caption || 'Site photo', loading: 'lazy' }), el('p', { class: 'small', text: p.caption || '' })); }))) : null);
-  }
-
-  // ---------- Pricing settings ----------
-  // The numbers are kept on the server, one set for everyone. Only a login the server says
-  // may change them (owner and admin) gets the form; the server checks that again on save.
-  function renderSettings(main, b) {
-    flushEditor();
-    var s = settingsOf(b);
-    var back = el('a', { class: 'btn btn-ghost', href: '#/job/' + b.job.id, text: 'Back to the quote' });
-    if (!s || !b.can_edit_settings) {
-      append(main, el('section', { class: 'card form-card' }, el('h2', { text: 'Pricing settings' }),
-        el('p', { class: 'muted', text: 'Only the owner or an admin login can change the pricing settings.' }), back));
-      return;
-    }
-    function field(id, label, value, hint) {
-      var input = el('input', { type: 'text', inputmode: 'decimal', id: id, value: value == null ? '' : L.qtyText(value) });
-      return { input: input, node: el('div', { class: 'field' }, el('label', { for: id, text: label }), input, el('p', { class: 'muted small', text: hint })) };
-    }
-    var rate = field('set-rate', 'Labour rate, $ an hour ex GST', s.labour_rate_ex_gst, 'An hour on a Labour line is charged at this on insurance repair quotes, whatever it costs us.');
-    var mult = field('set-mult', 'Materials multiplier', s.materials_multiplier, 'A Material line is charged at our cost times this on insurance repair quotes.');
-    var target = field('set-target', 'Target margin %', s.target_margin_pct, 'Leave blank for no target. With a target, the margin goes red below it and the screen says what to charge to reach it.');
-    var err = el('p', { class: 'form-error' });
-    var btn = el('button', { class: 'btn btn-primary', type: 'submit', text: 'Save settings' });
-    append(main, el('form', { class: 'card form-card', onsubmit: async function (e) {
-      e.preventDefault();
-      var r = L.num(rate.input.value), m = L.num(mult.input.value), blank = !String(target.input.value).trim(), t = L.num(target.input.value);
-      if (!(r > 0 && r <= 1000)) { err.textContent = 'Labour rate must be more than 0 and at most 1,000.'; return; }
-      if (!(m >= 1 && m <= 10)) { err.textContent = 'Materials multiplier must be from 1 to 10.'; return; }
-      if (!blank && !(t > 0 && t <= 95)) { err.textContent = 'Target margin must be more than 0 and at most 95, or blank.'; return; }
-      btn.disabled = true; btn.textContent = 'Saving…'; err.textContent = '';
-      try {
-        await api.saveSettings({ labour_rate_ex_gst: r, materials_multiplier: m, target_margin_pct: blank ? null : t });
-        toast('Pricing settings saved.');
-        location.hash = '#/job/' + b.job.id;
-      } catch (ex) {
-        err.textContent = 'Not saved: ' + errorText(ex);
-        btn.disabled = false; btn.textContent = 'Save settings';
-      }
-    } },
-      el('h2', { text: 'Pricing settings' }),
-      el('p', { class: 'muted', text: 'One set of numbers for every insurance repair quote, on every device. A change applies the next time Fill from costs is used; quotes already filled or issued keep their prices.' }),
-      rate.node, mult.node, target.node, err,
-      el('div', { class: 'row-actions' }, btn, back)));
   }
 
   // ---------- Router ----------
@@ -1280,7 +1218,6 @@
     else if ((m = h.match(/^#\/job\/([^/]+)\/var\/([^/]+)$/))) withBundle(m[1], 'variations', function (main, b) { openEditor(main, b, 'variation', decodeURIComponent(m[2])); });
     else if ((m = h.match(/^#\/job\/([^/]+)\/variations$/))) withBundle(m[1], 'variations', renderVariations);
     else if ((m = h.match(/^#\/job\/([^/]+)\/history$/))) withBundle(m[1], 'history', renderHistory);
-    else if ((m = h.match(/^#\/job\/([^/]+)\/settings$/))) withBundle(m[1], 'scope', renderSettings);
     else if ((m = h.match(/^#\/job\/([^/]+)\/v\/([^/]+)$/))) withBundle(m[1], 'history', function (main, b) { renderVersion(main, b, m[2]); });
     else if ((m = h.match(/^#\/job\/([^/]+)$/))) withBundle(m[1], 'scope', function (main, b) { openEditor(main, b, 'scope'); });
     else { flushEditor(); renderList(); }

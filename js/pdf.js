@@ -418,7 +418,7 @@
       cols.forEach(function (c, ci) {
         var tx = c.align === 'right' ? x + c.w - 3 : x + 3;
         var value = cells[c.key] == null ? '' : String(cells[c.key]);
-        doc.text(ci === 0 ? dl : (value ? doc.splitTextToSize(value, c.w - 4)[0] : ''), tx, y + 5, { align: c.align });
+        doc.text(ci === 0 ? dl : value, tx, y + 5, { align: c.align });
         x += c.w;
       });
       y += rowH;
@@ -468,10 +468,10 @@
     return { doc: doc, y: y, newPage: newPage, ref: ref };
   }
 
-  function plainLine(doc, text, y, bold) {
-    doc.setFont('helvetica', bold ? 'bold' : 'normal');
+  function plainLine(doc, text, y) {
+    doc.setFont('helvetica', 'normal');
     doc.setFontSize(9.5);
-    doc.setTextColor.apply(doc, bold ? DARK : BODY);
+    doc.setTextColor.apply(doc, BODY);
     doc.text(text, MARGIN + 1, y + 3.5);
     return y + 6;
   }
@@ -489,9 +489,9 @@
     { key: 'total', w: 29, align: 'right', title: 'Cost' }
   ];
 
-  // Scope of works: the write-up, the client lines as description, quantity and unit, the
-  // hours of labour allowed and the ticked photos. It is never given the cost lines and it
-  // prints no dollar amount of any kind, so it is safe to hand to a trade or a builder.
+  // Scope of works: the write-up, the client lines as description, quantity and unit, and
+  // the ticked photos. It is never given the cost lines or the hours of labour allowed and
+  // it prints no dollar amount of any kind, so it is safe to hand to a trade or a builder.
   function buildScope(opts) {
     var d = startDoc(opts, 'Scope of works', 'Scope of works for the job. No prices.');
     var doc = d.doc, y = d.y, v = opts.version;
@@ -515,12 +515,6 @@
       if (y + 30 > CONTENT_BOTTOM) y = d.newPage();
       y = sectionBar(doc, 'Work items', y);
       y = drawTable(doc, y, WORK_COLS, work.map(function (l) { return { desc: l.description, qty: L.qtyText(l.qty), unit: l.unit }; }), d.newPage);
-    }
-
-    if (opts.labourHours > 0) {
-      if (y + 20 > CONTENT_BOTTOM) y = d.newPage();
-      y = sectionBar(doc, 'Labour allowed', y);
-      y = plainLine(doc, L.hoursText(opts.labourHours) + ' of labour allowed for this job.', y, true);
     }
 
     photoPages(doc, opts.photos, d.newPage);
@@ -584,8 +578,7 @@
       }
       return { blob: build(Object.assign({}, opts, { logo: logo, photos: loaded })), missingPhotos: missing };
     },
-    // The scope of works takes the same photos as the quote and never the cost lines; the
-    // caller passes the hours of labour allowed as a plain number.
+    // The scope of works takes the same photos as the quote and never the cost lines.
     async renderScope(opts) {
       var logo = await loadLogo();
       var loaded = [], missing = 0;

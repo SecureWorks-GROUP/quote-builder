@@ -79,7 +79,7 @@ test('charge lines default gst_applies to true', () => {
 });
 
 test('chargeFromCosts applies markup and makes fresh charge ids', () => {
-  const out = L.chargeFromCosts([{ line_id: 'c-1', description: 'Sheet', qty: 3, unit: 'ea', unit_cost_ex_gst: 100 }], 25);
+  const out = L.chargeFromCosts([{ line_id: 'c-1', description: 'Sheet', qty: 3, unit: 'ea', unit_cost_ex_gst: 100 }], { otherMarkupPct: 25 });
   assert.equal(out.length, 1);
   assert.equal(out[0].unit_price_ex_gst, 125);
   assert.equal(out[0].qty, 3);
@@ -194,7 +194,7 @@ test('markup is only asked when an Other line exists or a needed setting is miss
 test('a private quote ignores the settings: every line takes the one markup, as before', () => {
   const out = L.chargeFromCosts(SCOPE, { lane: 'private', labourRate: 95, materialsMultiplier: 1.5, otherMarkupPct: 30 });
   assert.deepEqual(prices(out).map((p) => p[2]), [65, 325, 260]);
-  assert.deepEqual(prices(L.chargeFromCosts(SCOPE, 30)), prices(out));
+  assert.deepEqual(prices(L.chargeFromCosts(SCOPE, { otherMarkupPct: 30 })), prices(out));
 });
 
 test('labour allowed: hours and cost from Labour lines only, charged amount when there is a rate', () => {

@@ -1,7 +1,7 @@
 // In-memory stand-in for Supabase auth, Storage and the ops-api quote_builder_* actions,
 // written from secureworks-backend docs/quote-builder-contract.md (v1) plus the additions
-// the app expects next (docs/backend-needed.md: settings, line types, settings save, job
-// value). Routes are installed on a Playwright page, so nothing leaves the machine.
+// the app expects next (docs/backend-needed.md: settings and line types). Routes are
+// installed on a Playwright page, so nothing leaves the machine.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -46,9 +46,7 @@ function seed() {
     // Pricing settings held by the server (org_config). Test values only: the real numbers
     // live on the server and never in this repo. Set settings to undefined to stand in for
     // an older ops-api that does not send them or keep line types yet.
-    settings: { labour_rate_ex_gst: 95, materials_multiplier: 1.5, target_margin_pct: null },
-    canEditSettings: false,   // true: the signed-in login is an owner or admin
-    reportJobValue: false     // true: issue reports the job value it wrote
+    settings: { labour_rate_ex_gst: 95, materials_multiplier: 1.5, target_margin_pct: null }
   };
 }
 
@@ -113,7 +111,7 @@ function handle(db, action, q, body) {
       if (!j) return err(404, 'job_not_found');
       const cid = db.scopeChain[j.id] || null;
       const varChains = Object.keys(db.chains).filter((c) => db.chains[c].job_id === j.id && db.chains[c].kind === 'variation');
-      return { status: 200, body: Object.assign(db.settings === undefined ? {} : { settings: Object.assign({}, db.settings), can_edit_settings: db.canEditSettings }, {
+      return { status: 200, body: Object.assign(db.settings === undefined ? {} : { settings: Object.assign({}, db.settings) }, {
         job: publicJob(db, j),
         scope: { chain_id: cid, versions: cid ? chainVersions(db, cid) : [] },
         variations: varChains.map((c) => {
@@ -223,9 +221,7 @@ function handle(db, action, q, body) {
         variation = { id: vr.id, variation_number: vr.number, status: vr.status, amount: vr.amount };
         stage = moveStage(j, 'variation');
       } else stage = moveStage(j, 'quoted');
-      const out = { version: strip(v), document: { id: doc.id, quote_number: doc.quote_number, url: doc.url }, variation, stage };
-      if (db.reportJobValue) out.job_value = { written: true, total_inc_gst: v.charge_total_inc_gst };
-      return { status: 200, body: out };
+      return { status: 200, body: { version: strip(v), document: { id: doc.id, quote_number: doc.quote_number, url: doc.url }, variation, stage } };
     }
     case 'quote_builder_decide_variation': {
       const vr = db.variations.find((x) => x.id === body.variation_id);
@@ -234,14 +230,6 @@ function handle(db, action, q, body) {
       vr.status = body.approved ? 'approved' : 'rejected';
       const stage = body.approved ? moveStage(findJob(vr.job_id), 'approved') : { moved: false, reason: 'rejected' };
       return { status: 200, body: { approved: !!body.approved, variation_id: vr.id, stage } };
-    }
-    case 'quote_builder_settings_save': {
-      if (db.settings === undefined) return err(400, 'unknown_action');
-      if (!db.canEditSettings) return err(403, 'operator_access_required');
-      const rate = body.labour_rate_ex_gst, mult = body.materials_multiplier, target = body.target_margin_pct;
-      if (!(rate >= 0 && rate <= 1000) || !(mult >= 1 && mult <= 10) || !(target === null || (target >= 0 && target <= 95))) return err(400, 'invalid_input');
-      db.settings = { labour_rate_ex_gst: rate, materials_multiplier: mult, target_margin_pct: target };
-      return { status: 200, body: { settings: Object.assign({}, db.settings) } };
     }
     default:
       return err(400, 'unknown_action');

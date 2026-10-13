@@ -169,9 +169,8 @@
   // rules = { lane, labourRate, materialsMultiplier, otherMarkupPct }. On an insurance repair
   // job ('repair' lane) an hour of labour is charged at the labour rate whatever it costs us,
   // and a material at its cost times the multiplier. Other lines, a type whose setting is not
-  // set, and every line on a private quote take the markup percent. A bare number is that markup.
+  // set, and every line on a private quote take the markup percent.
   function chargeFromCosts(costLines, rules) {
-    if (rules == null || typeof rules !== 'object') rules = { otherMarkupPct: rules };
     var insurance = rules.lane === 'repair';
     var rate = insurance ? positiveOrNull(rules.labourRate) : null;
     var mult = insurance ? positiveOrNull(rules.materialsMultiplier) : null;
