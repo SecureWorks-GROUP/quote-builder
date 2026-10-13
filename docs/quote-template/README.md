@@ -15,7 +15,7 @@ The client quote PDF follows the quote template the fence and patio tools share:
 | A two-page quote, after | ![two pages after](two-page-after.png) |
 | Site photos, scope of works, material order list, after | ![other pages](photos-scope-materials-after.png) |
 
-To make them again: `npm test` saves the PDFs in `test-results/shots` (`*-template-quote.pdf`, `*-template-two-page.pdf`), and `pdftoppm -png` turns a PDF into pictures.
+To make the client quote stills again: `npm test` saves the PDFs in `test-results/shots` (`*-template-quote.pdf`, `*-template-two-page.pdf`), and `pdftoppm -png` turns a PDF into pictures. The scope of works and material order list stills were made the same way from the same made-up quote, by calling `QBPdf.renderScope` and `QBPdf.renderMaterials` with made-up Material lines; `npm test` saves those two documents only for the fake back end's job (`*-scope-of-works.pdf`, `*-material-order-list.pdf`). The "before" pictures came from the code as it was before the template.
 
 ## What the template has that this quote leaves out
 
