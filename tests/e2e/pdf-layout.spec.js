@@ -53,7 +53,7 @@ const TERMS = [
 test('the client quote still prints every piece of the quote, in the same order, and nothing new', async ({ page }) => {
   const bytes = await render(page, 'render', fx.quote(), 2);
   save('template-quote', bytes);
-  // The template's typeface is in the file: a quote that fell back to Helvetica would not have it.
+  // The template's typeface is in the file.
   expect(bytes.toString('latin1')).toContain('PlusJakartaSans');
 
   const pages = await pdfPages(bytes);
@@ -95,7 +95,9 @@ test('the client quote still prints every piece of the quote, in the same order,
   });
 
   // The fence and patio quotes carry blocks this tool has no data for. None of them is made up here.
+  // The labels are letter-spaced, so the squashed text is checked as well.
   expect(all).not.toMatch(/deposit|payment|accept|warrant|licen[cs]ed|insured|balance|bank|holds until/i);
+  expect(labels).not.toMatch(/deposit|payment|accept|warrant|licen[cs]ed|insured|balance|bank|holdsuntil/);
 });
 
 test('a variation quote for a private client keeps its own headings and contact lines', async ({ page }) => {

@@ -34,5 +34,6 @@ The quote builder holds no data for these, so they are not printed and nothing i
 ## Brand assets
 
 - Logo: `assets/logo-white.png`, as before. The template uses an SVG logo with "Group" in the lockup; this repo does not have it, so "Group" is still drawn as text beside the mark.
-- Typeface: Plus Jakarta Sans regular, bold and extra bold in `assets/fonts`, under the SIL Open Font License (`assets/fonts/OFL.txt`). It is the Google font the fence and patio pages already load. The PDF needs the font files themselves, so they ship here.
+- "Group" is drawn larger and brighter than the template draws it. The template sets it at about half the height of the wordmark in 60% white, which is too faint to read on the navy band. Here it is 10.5 pt in full white, so the band reads "SecureWorks Group" at a glance.
+- Typeface: Plus Jakarta Sans regular, bold and extra bold in `assets/fonts`, under the SIL Open Font License (`assets/fonts/OFL.txt`). It is the Google font the fence and patio pages already load. The PDF needs the font files themselves, so they ship here. If a font file does not load, no PDF is made and the app says to try again: a quote is never previewed or issued in another typeface.
 - No brand photographs were added.

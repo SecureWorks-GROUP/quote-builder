@@ -1,7 +1,7 @@
 'use strict';
 const { test, expect } = require('@playwright/test');
 const { seed, install } = require('./fake-backend');
-const { pdfWords } = require('./pdf-text');
+const { pdfWords, squash } = require('./pdf-text');
 
 let db;
 
@@ -101,7 +101,9 @@ test('scope a repair job: costs on top, client charge below, autosave, issue a P
   expect(pdf).toContain('Prepared by Hugo Tester');
   expect(pdf).toContain('This quote is valid for 30 days');
   // No licence or insurance claim prints until the owner supplies the wording.
+  // The labels are letter-spaced, so the squashed text is checked as well.
   expect(pdf).not.toMatch(/licen[cs]ed|insured/i);
+  expect(squash(pdf)).not.toMatch(/licen[cs]ed|insured/);
   // Internal costs never reach the client PDF.
   for (const secret of ['Remove and dispose damaged fascia', 'Carpenter labour', 'Bunnings', 'Dave the chippy', '$485.00']) expect(pdf).not.toContain(secret);
 
@@ -602,6 +604,41 @@ test('a late load of the same job does not replace the open editor\'s job data: 
   expect(pdf).toContain('Site photos');
 });
 
+test('a quote font that will not load stops the preview and the issue: no PDF is made, uploaded or frozen', async ({ page }) => {
+  await capturePdfs(page);
+  await signIn(page);
+  await page.click('.job-card:has-text("SWR-26103")');
+  await typeLine(page.locator('.line.charge').nth(0), { description: 'Replace fascia', qty: 1, unit: 'item', price: 650 });
+  await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
+
+  let fontDown = true;
+  await page.route('**/assets/fonts/PlusJakartaSans-ExtraBold.ttf', (route) => fontDown ? route.fulfill({ status: 404 }) : route.fallback());
+  await page.evaluate(() => { window.open = () => null; });
+
+  await page.click('button:has-text("Preview client PDF")');
+  await expect(page.locator('.toast')).toHaveText('Could not make the PDF: The quote font could not be loaded. Check your signal and try again.', { timeout: 20000 });
+  expect(await page.evaluate(() => window.__pdfs.length)).toBe(0);
+
+  await page.click('button:has-text("Issue client quote")');
+  await page.click('.modal button:has-text("Issue")');
+  await expect(page.locator('.modal h2')).toHaveText('Not issued', { timeout: 20000 });
+  await expect(page.locator('.modal')).toContainText('The quote font could not be loaded. Check your signal and try again.');
+  await page.click('.modal button:has-text("OK")');
+  expect(await page.evaluate(() => window.__pdfs.length)).toBe(0);
+  expect(Object.keys(db.files).filter((k) => k.startsWith('job-pdfs/'))).toHaveLength(0);
+  expect(calls('quote_builder_issue')).toHaveLength(0);
+  expect(db.versions[0].status).toBe('draft');
+  expect(db.documents).toHaveLength(0);
+
+  // The font loads again: trying again issues the quote, in the template's typeface.
+  fontDown = false;
+  await page.click('button:has-text("Issue client quote")');
+  await page.click('.modal button:has-text("Issue")');
+  await expect(page.locator('.modal h2')).toHaveText('Issued SWR-26103-Q1', { timeout: 20000 });
+  const issued = db.files[Object.keys(db.files).find((k) => k.startsWith('job-pdfs/'))].body;
+  expect(issued.toString('latin1')).toContain('PlusJakartaSans');
+});
+
 test('a line with a supplier but no description is flagged on screen and blocks issuing', async ({ page }) => {
   await signIn(page);
   await page.click('.job-card:has-text("SWR-26103")');
@@ -827,6 +864,7 @@ test('scope of works prints the client lines with their quantities, no dollar am
   // Nothing from the cost table: no Labour allowed section, not its 8 hours, no dollar amount, no supplier.
   expect(scope).not.toContain('$');
   expect(scope.toLowerCase()).not.toContain('labour allowed');
+  expect(squash(scope)).not.toContain('labourallowed');
   expect(scope).not.toContain('8 hours');
   expect(cells).not.toContain('8');
   for (const secret of ['Bunnings', 'Stratco', 'Dave the chippy', 'Skip hire co']) expect(scope).not.toContain(secret);

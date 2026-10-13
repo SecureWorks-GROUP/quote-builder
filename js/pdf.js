@@ -39,8 +39,6 @@
   var FONT_FILES = { normal: 'PlusJakartaSans-Regular.ttf', bold: 'PlusJakartaSans-Bold.ttf', extrabold: 'PlusJakartaSans-ExtraBold.ttf' };
 
   var logoCache = null, fontCache = null;
-  // The typeface of the document being built: the template's, or Helvetica when it did not load.
-  var face = 'helvetica';
 
   function blobToDataUrl(blob) {
     return new Promise(function (resolve, reject) {
@@ -62,19 +60,18 @@
   }
 
   // Plus Jakarta Sans ships in assets/fonts (SIL Open Font License) so the PDF never waits
-  // on a font from another site. If a file will not load, the PDF is still made, in Helvetica.
+  // on a font from another site. If a file will not load, no PDF is made: a quote in any
+  // other typeface is off the template and must never be issued.
   async function loadFonts() {
     if (fontCache) return fontCache;
-    try {
-      var out = {};
-      for (var style in FONT_FILES) {
-        var res = await fetch('assets/fonts/' + FONT_FILES[style]);
-        if (!res.ok) return null;
-        out[style] = (await blobToDataUrl(await res.blob())).split(',')[1];
-      }
-      fontCache = out;
-      return fontCache;
-    } catch (e) { return null; }
+    var out = {};
+    for (var style in FONT_FILES) {
+      var res = await fetch('assets/fonts/' + FONT_FILES[style]).catch(function () { return null; });
+      if (!res || !res.ok) throw new Error('The quote font could not be loaded. Check your signal and try again.');
+      out[style] = (await blobToDataUrl(await res.blob())).split(',')[1];
+    }
+    fontCache = out;
+    return fontCache;
   }
 
   // Load a photo and shrink it so the PDF stays small enough to upload from a phone signal.
@@ -100,20 +97,16 @@
 
   function newDoc(fonts) {
     var doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4', compress: true });
-    face = 'helvetica';
-    if (fonts) {
-      Object.keys(FONT_FILES).forEach(function (style) {
-        doc.addFileToVFS(FONT_FILES[style], fonts[style]);
-        doc.addFont(FONT_FILES[style], FONT, style);
-      });
-      face = FONT;
-    }
+    Object.keys(FONT_FILES).forEach(function (style) {
+      doc.addFileToVFS(FONT_FILES[style], fonts[style]);
+      doc.addFont(FONT_FILES[style], FONT, style);
+    });
     return doc;
   }
 
-  // weight is 'normal', 'bold' or 'extrabold'; Helvetica has no extra bold, so it gets bold.
+  // weight is 'normal', 'bold' or 'extrabold'.
   function type(doc, weight, size, color) {
-    doc.setFont(face, face === FONT || weight === 'normal' ? weight : 'bold');
+    doc.setFont(FONT, weight);
     doc.setFontSize(size);
     if (color) doc.setTextColor.apply(doc, color);
   }
@@ -150,8 +143,8 @@
     var logoH = 9, logoW = logoH * (1600 / 319);
     if (logo) {
       doc.addImage(logo, 'PNG', MARGIN - 1, mid - logoH / 2, logoW, logoH);
-      type(doc, 'normal', 6.5, SOFT);
-      doc.text('Group', MARGIN - 1 + logoW + 0.4, mid + 2.1);
+      type(doc, 'normal', 10.5, WHITE);
+      doc.text('Group', MARGIN - 1 + logoW + 0.8, mid + 2.1);
     } else {
       type(doc, 'extrabold', 15, WHITE);
       doc.text('SecureWorks Group', MARGIN, mid + 1.9);
@@ -339,10 +332,10 @@
     };
 
     band(doc, logo, quoteNumber, dateText);
-    var heading = variation ? 'Variation quote' : 'Quote';
+    var docTitle = variation ? 'Variation quote' : 'Quote';
     var y = hero(doc, {
-      eyebrow: v.title ? heading : '',
-      title: v.title || heading,
+      eyebrow: v.title ? docTitle : '',
+      title: v.title || docTitle,
       note: variation && opts.variationNumber ? 'Variation ' + opts.variationNumber + ' to the works on job ' + (job.job_number || '') : ''
     });
 
