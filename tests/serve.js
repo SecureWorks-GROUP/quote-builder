@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const root = path.resolve(__dirname, '..');
 const port = Number(process.env.PORT || 4517);
-const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.json': 'application/json', '.md': 'text/plain' };
+const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.json': 'application/json', '.md': 'text/plain', '.ttf': 'font/ttf' };
 http.createServer((req, res) => {
   const url = decodeURIComponent(req.url.split('?')[0]);
   let file = path.join(root, url === '/' ? 'index.html' : url);

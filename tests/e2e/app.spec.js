@@ -1,13 +1,13 @@
 'use strict';
 const { test, expect } = require('@playwright/test');
 const { seed, install } = require('./fake-backend');
+const { pdfWords } = require('./pdf-text');
 
 let db;
 
 test.beforeEach(async ({ page }) => {
   db = seed();
   await install(page, db);
-  await page.addInitScript(() => { window.QB_PDF_PLAIN = true; });
   page.on('pageerror', (e) => { throw e; });
 });
 
@@ -89,10 +89,10 @@ test('scope a repair job: costs on top, client charge below, autosave, issue a P
   await page.click('.modal button:has-text("OK")');
 
   const pdfKey = Object.keys(db.files).find((k) => k.startsWith('job-pdfs/'));
-  const pdf = db.files[pdfKey].body.toString('latin1');
+  const pdf = await pdfWords(db.files[pdfKey].body);
   require('fs').mkdirSync('test-results/shots', { recursive: true });
   require('fs').writeFileSync(`test-results/shots/${test.info().project.name}-quote.pdf`, db.files[pdfKey].body);
-  expect(pdf.startsWith('%PDF')).toBe(true);
+  expect(db.files[pdfKey].body.subarray(0, 4).toString('latin1')).toBe('%PDF');
   expect(db.files[pdfKey].type).toBe('application/pdf');
   expect(pdf).toContain('SWR-26101-Q1');
   expect(pdf).toContain('Replace fascia, 12.5 m, supply and install');
@@ -177,7 +177,7 @@ test('a quantity with 3 decimals prints as typed, so the row multiplies out on t
   await expect(page.locator('.modal h2')).toHaveText('Issued SWR-26103-Q1', { timeout: 20000 });
   await page.click('.modal button:has-text("OK")');
 
-  const pdf = db.files[Object.keys(db.files).find((k) => k.startsWith('job-pdfs/'))].body.toString('latin1');
+  const pdf = await pdfWords(db.files[Object.keys(db.files).find((k) => k.startsWith('job-pdfs/'))].body);
   expect(pdf).toContain('(2.375)');
   expect(pdf).not.toContain('(2.38)');
   expect(pdf).toContain('$23.75');
@@ -598,7 +598,7 @@ test('a late load of the same job does not replace the open editor\'s job data: 
   await expect(page.locator('.modal h2')).toHaveText('Issued SWR-26102-Q1', { timeout: 20000 });
 
   expect(db.versions[0].photo_media_ids).toEqual([db.photos[0].id]);
-  const pdf = db.files[Object.keys(db.files).find((k) => k.startsWith('job-pdfs/'))].body.toString('latin1');
+  const pdf = await pdfWords(db.files[Object.keys(db.files).find((k) => k.startsWith('job-pdfs/'))].body);
   expect(pdf).toContain('Site photos');
 });
 
@@ -626,16 +626,22 @@ async function capturePdfs(page) {
   });
 }
 
-// The words a PDF actually prints (its text-showing operators), so image bytes cannot match.
+// The words a PDF actually prints, each piece as "(text)" on its own line, so image bytes cannot match.
 async function lastPdfWords(page, count, saveAs) {
   await expect.poll(() => page.evaluate(() => window.__pdfs.length), { timeout: 20000 }).toBe(count);
-  const raw = await page.evaluate(async () => new TextDecoder('latin1').decode(await window.__pdfs[window.__pdfs.length - 1].arrayBuffer()));
-  expect(raw.startsWith('%PDF')).toBe(true);
+  const b64 = await page.evaluate(async () => {
+    const buf = new Uint8Array(await window.__pdfs[window.__pdfs.length - 1].arrayBuffer());
+    let s = '';
+    for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i]);
+    return btoa(s);
+  });
+  const bytes = Buffer.from(b64, 'base64');
+  expect(bytes.subarray(0, 4).toString('latin1')).toBe('%PDF');
   if (saveAs) {
     require('fs').mkdirSync('test-results/shots', { recursive: true });
-    require('fs').writeFileSync(`test-results/shots/${test.info().project.name}-${saveAs}.pdf`, Buffer.from(raw, 'latin1'));
+    require('fs').writeFileSync(`test-results/shots/${test.info().project.name}-${saveAs}.pdf`, bytes);
   }
-  return (raw.match(/\((?:\\.|[^\\()])*\)\s*Tj/g) || []).join('\n');
+  return pdfWords(bytes);
 }
 
 async function scopeThreeTypes(page) {

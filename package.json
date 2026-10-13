@@ -11,6 +11,7 @@
   "devDependencies": {
     "@playwright/test": "1.61.1",
     "@supabase/supabase-js": "2.45.4",
-    "jspdf": "3.0.3"
+    "jspdf": "3.0.3",
+    "pdfjs-dist": "4.10.38"
   }
 }
