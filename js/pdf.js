@@ -399,7 +399,8 @@
     return doc.output('blob');
   }
 
-  // A plain table for the internal documents: the first column wraps, the others are one line.
+  // A plain table for the scope of works and the material order list: the first column
+  // wraps, the others are one line.
   function drawTable(doc, y, cols, rows, newPage) {
     y = tableHeader(doc, y, cols);
     rows.forEach(function (cells, idx) {
@@ -438,7 +439,8 @@
     return { left: left, right: right };
   }
 
-  // The opening every internal document shares: band, title, what it is for, the job panel.
+  // The opening the scope of works and the material order list share: band, title, what it
+  // is for, the job panel.
   function startDoc(opts, title, note) {
     var jsPDF = window.jspdf.jsPDF;
     var doc = new jsPDF({ unit: 'mm', format: 'a4', compress: !window.QB_PDF_PLAIN });
