@@ -220,10 +220,25 @@ input[type=checkbox] { width: 26px; height: 26px; accent-color: var(--sw-orange)
   .line-total { justify-content: flex-start; }
 }
 
+/* Line types: one more column for the Type picker when the server sends the settings */
+.typed .lines-head.cost, .typed .line.cost { grid-template-columns: minmax(0, 1fr) 116px 72px 80px 104px 150px 108px 48px; }
+.typed .lines-head.cost span:nth-child(n+2) { text-align: left; }
+.typed .lines-head.cost span:nth-child(3), .typed .lines-head.cost span:nth-child(5), .typed .lines-head.cost span:nth-child(7) { text-align: right; }
+select.type { padding-left: 8px; padding-right: 4px; }
+@media (max-width: 900px) {
+  .typed .line.cost { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .typed .line.cost .cell:nth-of-type(4) { grid-column: span 2; }
+}
+
+.pricing-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin: 16px 0 0; padding: 10px 14px; background: #fff; border: 1px solid var(--sw-border); border-left: 4px solid var(--sw-blue-dark); border-radius: 10px; }
+.pricing-bar strong { color: var(--sw-blue-dark); }
+.pricing-bar .unset, .fill-rules .unset { color: var(--warn); font-weight: 700; }
+
 .margin-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 16px 0; }
 .margin-strip > div { background: var(--sw-blue-dark); color: #fff; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
 .margin-strip span { font-size: 13px; opacity: .8; }
 .margin-strip strong { font-size: 20px; font-variant-numeric: tabular-nums; }
+.margin-strip small { font-size: 13px; opacity: .85; }
 .margin-strip .warn { background: var(--err); }
 
 .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-top: 12px; }

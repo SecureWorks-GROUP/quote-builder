@@ -68,7 +68,7 @@ test('clean lines drop lines without a description and keep line ids', () => {
   ];
   const out = L.cleanCostLines(lines);
   assert.equal(out.length, 1);
-  assert.deepEqual(out[0], { line_id: 'c-keep', description: 'Remove fascia', qty: 2, unit: 'item', unit_cost_ex_gst: 18.01, supplier_or_trade: 'Bunnings' });
+  assert.deepEqual(out[0], { line_id: 'c-keep', line_type: 'other', description: 'Remove fascia', qty: 2, unit: 'item', unit_cost_ex_gst: 18.01, supplier_or_trade: 'Bunnings' });
   assert.equal(L.unnamedLines(lines), 1);
 });
 
@@ -79,7 +79,7 @@ test('charge lines default gst_applies to true', () => {
 });
 
 test('chargeFromCosts applies markup and makes fresh charge ids', () => {
-  const out = L.chargeFromCosts([{ line_id: 'c-1', description: 'Sheet', qty: 3, unit: 'ea', unit_cost_ex_gst: 100 }], 25);
+  const out = L.chargeFromCosts([{ line_id: 'c-1', description: 'Sheet', qty: 3, unit: 'ea', unit_cost_ex_gst: 100 }], { otherMarkupPct: 25 });
   assert.equal(out.length, 1);
   assert.equal(out[0].unit_price_ex_gst, 125);
   assert.equal(out[0].qty, 3);
@@ -145,4 +145,113 @@ test('filterJobs matches every word across number, client, address, builder and 
 test('draft keys separate scope and each variation chain', () => {
   assert.equal(L.draftKey('j', 'scope'), 'qb:draft:j:scope:scope');
   assert.equal(L.draftKey('j', 'variation', 'c1'), 'qb:draft:j:variation:c1');
+});
+
+// The pricing numbers here are test values. The real ones live on the server and are never
+// written in this repo, because the site is public.
+const RULES = { lane: 'repair', labourRate: 95, materialsMultiplier: 1.5, otherMarkupPct: 20 };
+const SCOPE = [
+  { line_id: 'c-1', line_type: 'labour', description: 'Carpenter', qty: 10, unit: 'day', unit_cost_ex_gst: 50, supplier_or_trade: 'Dave' },
+  { line_id: 'c-2', line_type: 'material', description: 'Fascia board', qty: 4, unit: 'm', unit_cost_ex_gst: 250, supplier_or_trade: 'Bunnings' },
+  { line_id: 'c-3', line_type: 'other', description: 'Skip bin', qty: 1, unit: 'item', unit_cost_ex_gst: 200, supplier_or_trade: 'Skip hire co' }
+];
+const prices = (lines) => lines.map((l) => [l.qty, l.unit, l.unit_price_ex_gst, L.chargeLineTotal(l)]);
+
+test('insurance fill: labour hours at the rate, materials at cost times the multiplier, other at the markup', () => {
+  const out = L.chargeFromCosts(SCOPE, RULES);
+  assert.deepEqual(prices(out), [[10, 'hr', 95, 950], [4, 'm', 375, 1500], [1, 'item', 240, 240]]);
+  assert.equal(L.totals(SCOPE, out).charge_total_ex_gst, 2690);
+  assert.deepEqual(out.map((l) => l.description), ['Carpenter', 'Fascia board', 'Skip bin']);
+  assert.ok(out.every((l) => /^q-/.test(l.line_id) && l.gst_applies === true));
+});
+
+test('labour is charged at the rate whatever it costs us, and a material price rounds to cents', () => {
+  const out = L.chargeFromCosts([
+    { line_type: 'labour', description: 'Free labour', qty: 2.5, unit_cost_ex_gst: 0 },
+    { line_type: 'material', description: 'Screws', qty: 3, unit: 'box', unit_cost_ex_gst: 3.33 }
+  ], RULES);
+  assert.deepEqual(prices(out), [[2.5, 'hr', 95, 237.5], [3, 'box', 5, 15]]);
+});
+
+test('a setting that is not set sends that type down the markup path; the numbers are never invented', () => {
+  const noRate = L.chargeFromCosts(SCOPE, { lane: 'repair', labourRate: null, materialsMultiplier: 1.5, otherMarkupPct: 20 });
+  assert.deepEqual(prices(noRate).map((p) => p[2]), [60, 375, 240]);
+  const noMult = L.chargeFromCosts(SCOPE, { lane: 'repair', labourRate: 95, otherMarkupPct: 20 });
+  assert.deepEqual(prices(noMult).map((p) => p[2]), [95, 300, 240]);
+  assert.deepEqual(L.fillNeeds(SCOPE, { lane: 'repair', labourRate: null, materialsMultiplier: 1.5 }),
+    { labourRateMissing: true, materialsMultiplierMissing: false, otherLines: 1, askMarkup: true });
+});
+
+test('markup is only asked when an Other line exists or a needed setting is missing', () => {
+  const typed = SCOPE.slice(0, 2);
+  assert.equal(L.fillNeeds(typed, RULES).askMarkup, false);
+  assert.equal(L.fillNeeds(SCOPE, RULES).askMarkup, true);
+  // A missing rate does not matter while there is no Labour line to price.
+  assert.equal(L.fillNeeds([SCOPE[1]], { lane: 'repair', labourRate: null, materialsMultiplier: 1.5 }).askMarkup, false);
+  assert.equal(L.fillNeeds(typed, { lane: 'private' }).askMarkup, true);
+});
+
+test('a private quote ignores the settings: every line takes the one markup, as before', () => {
+  const out = L.chargeFromCosts(SCOPE, { lane: 'private', labourRate: 95, materialsMultiplier: 1.5, otherMarkupPct: 30 });
+  assert.deepEqual(prices(out).map((p) => p[2]), [65, 325, 260]);
+  assert.deepEqual(prices(L.chargeFromCosts(SCOPE, { otherMarkupPct: 30 })), prices(out));
+});
+
+test('labour allowed: hours and cost from Labour lines only, charged amount when there is a rate', () => {
+  assert.deepEqual(L.labourAllowed(SCOPE, 95), { hours: 10, cost_ex_gst: 500, charge_ex_gst: 950 });
+  assert.deepEqual(L.labourAllowed(SCOPE), { hours: 10, cost_ex_gst: 500, charge_ex_gst: null });
+  assert.deepEqual(L.labourAllowed([{ description: 'a', qty: 0.1, line_type: 'labour' }, { description: 'b', qty: 0.2, line_type: 'labour' }], 95).hours, 0.3);
+  assert.equal(L.hoursText(1), '1 hour');
+  assert.equal(L.hoursText(7.5), '7.5 hours');
+});
+
+test('a cost line saved before types existed reads as Other: not labour, not on the material list', () => {
+  const old = [{ line_id: 'c-9', description: 'Labour', qty: 24, unit: 'item', unit_cost_ex_gst: 25, supplier_or_trade: '' }];
+  assert.equal(L.lineType(old[0]), 'other');
+  assert.deepEqual(L.labourAllowed(old, 95), { hours: 0, cost_ex_gst: 0, charge_ex_gst: 0 });
+  assert.equal(L.draftFromVersion({ cost_lines: old }).cost_lines[0].line_type, 'other');
+  assert.equal(L.cleanCostLines([{ description: 'x', line_type: 'banana' }])[0].line_type, 'other');
+  const list = L.materialsBySupplier(old);
+  assert.deepEqual([list.line_count, list.not_listed, list.groups.length], [0, 1, 0]);
+});
+
+test('a Labour line is always in hours; a new cost line starts as Material', () => {
+  assert.equal(L.cleanCostLines([SCOPE[0]])[0].unit, 'hr');
+  assert.equal(L.blankCostLine().line_type, 'material');
+  assert.equal(L.savePayload({ id: 'j' }, 'scope', null, null, { cost_lines: SCOPE, charge_lines: [] }).cost_lines[0].line_type, 'labour');
+});
+
+test('chargeForTarget: what to charge to reach the target margin, null with no target', () => {
+  assert.equal(L.chargeForTarget(650, 35), 1000);
+  assert.equal(L.chargeForTarget(100, 35), 153.85);
+  assert.equal(L.chargeForTarget(100, null), null);
+  assert.equal(L.chargeForTarget(100, 0), null);
+  assert.equal(L.chargeForTarget(100, 100), null);
+});
+
+test('pricingSettings: a server that sends none gives null; a missing or junk number is not set', () => {
+  assert.equal(L.pricingSettings(undefined), null);
+  assert.deepEqual(L.pricingSettings({}), { labour_rate_ex_gst: null, materials_multiplier: null, target_margin_pct: null });
+  assert.deepEqual(L.pricingSettings({ labour_rate_ex_gst: '95', materials_multiplier: 1.5, target_margin_pct: 35 }),
+    { labour_rate_ex_gst: 95, materials_multiplier: 1.5, target_margin_pct: 35 });
+  assert.deepEqual(L.pricingSettings({ labour_rate_ex_gst: -5, materials_multiplier: 'x', target_margin_pct: 100 }),
+    { labour_rate_ex_gst: null, materials_multiplier: null, target_margin_pct: null });
+});
+
+test('material order list: Material lines by supplier A to Z, no supplier last, with costs and totals', () => {
+  const list = L.materialsBySupplier(SCOPE.concat([
+    { line_id: 'c-4', line_type: 'material', description: 'Gutter', qty: 2, unit: 'lm', unit_cost_ex_gst: 12.5, supplier_or_trade: 'Stratco' },
+    { line_id: 'c-5', line_type: 'material', description: 'Paint', qty: 1, unit: 'ea', unit_cost_ex_gst: 60, supplier_or_trade: 'bunnings' },
+    { line_id: 'c-6', line_type: 'material', description: 'Sundries', qty: 1, unit: 'lot', unit_cost_ex_gst: 40, supplier_or_trade: '' },
+    { line_id: 'c-7', line_type: 'material', description: '', qty: 1, unit: 'ea', unit_cost_ex_gst: 999, supplier_or_trade: 'Nobody' }
+  ]));
+  assert.deepEqual(list.groups.map((g) => [g.supplier, g.lines.map((l) => l.description), g.total_ex_gst]), [
+    ['Bunnings', ['Fascia board', 'Paint'], 1060],
+    ['Stratco', ['Gutter'], 25],
+    ['No supplier named', ['Sundries'], 40]
+  ]);
+  assert.deepEqual(list.groups[0].lines[0], { line_id: 'c-2', description: 'Fascia board', qty: 4, unit: 'm', unit_cost_ex_gst: 250, line_total_ex_gst: 1000 });
+  assert.equal(list.total_ex_gst, 1125);
+  assert.equal(list.line_count, 4);
+  assert.equal(list.not_listed, 1);
 });

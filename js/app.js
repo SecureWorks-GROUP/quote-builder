@@ -86,6 +86,14 @@
     return e.message || String(e);
   }
 
+  // Pricing settings and line types come with the job from the server (never from this
+  // repo: the site is public). Null means the server does not send them yet, and every
+  // screen then works as it did before line types existed.
+  function settingsOf(b) { return b ? L.pricingSettings(b.settings) : null; }
+  function isRepair(job) { return job.type !== 'miscellaneous'; }
+  function rateText(s) { return s.labour_rate_ex_gst ? 'Labour ' + L.money(s.labour_rate_ex_gst) + ' an hour' : 'Labour rate not set'; }
+  function multiplierText(s) { return s.materials_multiplier ? 'Materials at cost × ' + L.qtyText(s.materials_multiplier) : 'Materials multiplier not set'; }
+
   // ---------- Shell ----------
   function topbar(back) {
     var user = state.session && state.session.user;
@@ -387,7 +395,8 @@
   }
 
   function renderEditor(main, b, ed) {
-    var wrap = el('div', { class: 'editor' + (ed.locked ? ' locked' : '') });
+    var settings = settingsOf(b);
+    var wrap = el('div', { class: 'editor' + (ed.locked ? ' locked' : '') + (settings ? ' typed' : '') });
     ed.dom.wrap = wrap;
     append(main, wrap);
 
@@ -409,7 +418,8 @@
     ed.dom.costTotal = el('strong');
     append(wrap, el('section', { class: 'card internal' },
       el('div', { class: 'card-head' }, el('h2', { text: 'What it costs us' }), el('span', { class: 'pill pill-internal', text: 'Internal only, never on the quote' })),
-      el('div', { class: 'lines-head cost' }, ['Description', 'Qty', 'Unit', 'Unit cost', 'Supplier or trade', 'Line total', ''].map(function (h) { return el('span', { text: h }); })),
+      el('div', { class: 'lines-head cost' }, (settings ? ['Description', 'Type', 'Qty', 'Unit', 'Unit cost', 'Supplier or trade', 'Line total', ''] :
+        ['Description', 'Qty', 'Unit', 'Unit cost', 'Supplier or trade', 'Line total', '']).map(function (h) { return el('span', { text: h }); })),
       ed.dom.costBody,
       el('div', { class: 'lines-foot' },
         el('button', { class: 'btn', text: '+ Add cost line', disabled: ed.locked, onclick: function () { ed.draft.cost_lines.push(L.blankCostLine()); changed(ed); drawCost(ed, true); } }),
@@ -429,7 +439,13 @@
       ed.dom.photos));
     drawPhotos(ed);
 
-    // Margin strip between the two halves
+    // The insurance pricing in force, then the margin strip, between the two halves
+    if (settings && isRepair(ed.job)) {
+      append(wrap, el('div', { class: 'pricing-bar' },
+        el('strong', { text: 'Insurance pricing' }),
+        el('span', { class: settings.labour_rate_ex_gst ? '' : 'unset', text: rateText(settings) }),
+        el('span', { class: settings.materials_multiplier ? '' : 'unset', text: multiplierText(settings) })));
+    }
     ed.dom.margin = el('div', { class: 'margin-strip' });
     append(wrap, ed.dom.margin);
 
@@ -445,7 +461,7 @@
       el('div', { class: 'lines-foot' },
         el('div', { class: 'row-actions' },
           el('button', { class: 'btn', text: '+ Add charge line', disabled: ed.locked, onclick: function () { ed.draft.charge_lines.push(L.blankChargeLine()); changed(ed); drawCharge(ed, true); } }),
-          el('button', { class: 'btn btn-ghost', text: 'Fill from costs + markup', disabled: ed.locked, onclick: function () { fillFromCosts(ed); } })),
+          el('button', { class: 'btn btn-ghost', text: settings && isRepair(ed.job) ? 'Fill from costs' : 'Fill from costs + markup', disabled: ed.locked, onclick: function () { fillFromCosts(ed); } })),
         ed.dom.chargeTotals)));
     drawCharge(ed);
 
@@ -529,14 +545,28 @@
 
   function drawCost(ed, focusLast) {
     var body = ed.dom.costBody;
+    var typed = !!settingsOf(state.bundles[ed.job.id]);
     clear(body);
     ed.draft.cost_lines.forEach(function (l, idx) {
       var total = el('span', { class: 'line-total', text: L.money(L.costLineTotal(l)) });
       function upd(field, v) { l[field] = v; total.textContent = L.money(L.costLineTotal(l)); row.classList.toggle('unnamed', L.isBlankLine(l) && L.hasAmounts(l)); changed(ed); }
+      var unit = unitInput(l.unit, function (v) { upd('unit', v); }, ed.locked || (typed && L.lineType(l) === 'labour'));
+      // Labour is always in hours, so choosing it fixes the unit and the quantity is the hours.
+      var type = !typed ? null : el('select', { class: 'type', disabled: ed.locked, onchange: function () {
+        var labour = type.value === 'labour';
+        if (labour) { l.unit = 'hr'; unit.value = 'hr'; }
+        unit.disabled = labour;
+        upd('line_type', type.value);
+      } }, L.LINE_TYPES.map(function (t) {
+        var o = el('option', { value: t.value, text: t.label });
+        if (L.lineType(l) === t.value) o.selected = true;
+        return o;
+      }));
       var row = el('div', { class: 'line cost' + (L.isBlankLine(l) && L.hasAmounts(l) ? ' unnamed' : '') },
         descInput(l.description, function (v) { upd('description', v); }, ed.locked, 'What, e.g. Remove and dispose damaged fascia'),
+        type ? lbl('Type', type) : null,
         lbl('Qty', numInput(l.qty, function (v) { upd('qty', v); }, ed.locked)),
-        lbl('Unit', unitInput(l.unit, function (v) { upd('unit', v); }, ed.locked)),
+        lbl('Unit', unit),
         lbl('Unit cost', numInput(l.unit_cost_ex_gst, function (v) { upd('unit_cost_ex_gst', v); }, ed.locked, 'money')),
         lbl('Supplier or trade', el('input', { type: 'text', class: 'supplier', list: 'qb-suppliers', value: l.supplier_or_trade || '', disabled: ed.locked, oninput: function (e) { upd('supplier_or_trade', e.target.value); } })),
         lbl('Line total', total),
@@ -592,25 +622,64 @@
     }
     if (ed.dom.margin) {
       clear(ed.dom.margin);
-      var low = t.margin_pct != null && t.margin_pct < 15;
-      append(ed.dom.margin,
-        el('div', null, el('span', { text: 'Allowed (cost)' }), el('strong', { text: L.money(t.cost_total_ex_gst) })),
-        el('div', null, el('span', { text: 'Quoted (ex GST)' }), el('strong', { text: L.money(t.charge_total_ex_gst) })),
-        el('div', { class: t.margin_ex_gst < 0 || low ? 'warn' : '' }, el('span', { text: 'Margin' }),
-          el('strong', { text: L.money(t.margin_ex_gst) + (t.margin_pct != null ? '  (' + t.margin_pct.toFixed(1) + '%)' : '') })));
+      append(ed.dom.margin, marginTiles(t, ed.draft.cost_lines, settingsOf(state.bundles[ed.job.id]), isRepair(ed.job)));
     }
   }
 
+  // The strip of figures between the two tables. With a target margin set, the margin goes
+  // red below it and says what to charge to reach it. With no target set, it is red below
+  // 15 percent as it always was.
+  function marginTiles(t, costLines, settings, repair) {
+    var target = settings ? settings.target_margin_pct : null;
+    var low = t.margin_pct != null && t.margin_pct < (target != null ? target : 15);
+    var tiles = [el('div', null, el('span', { text: 'Allowed (cost)' }), el('strong', { text: L.money(t.cost_total_ex_gst) }))];
+    if (settings) {
+      var lab = L.labourAllowed(costLines, repair ? settings.labour_rate_ex_gst : null);
+      tiles.push(el('div', { class: 'labour-tile' }, el('span', { text: 'Labour allowed' }), el('strong', { text: L.hoursText(lab.hours) }),
+        el('small', { text: 'costs us ' + L.money(lab.cost_ex_gst) + (lab.charge_ex_gst != null ? ' · charged ' + L.money(lab.charge_ex_gst) + ' at ' + L.money(settings.labour_rate_ex_gst) + ' an hour' : '') })));
+    }
+    tiles.push(el('div', null, el('span', { text: 'Quoted (ex GST)' }), el('strong', { text: L.money(t.charge_total_ex_gst) })));
+    var need = L.chargeForTarget(t.cost_total_ex_gst, target);
+    var note = !settings ? null : target == null ? 'No target margin set' :
+      low || t.margin_pct == null ? 'To hit ' + L.qtyText(target) + '%, charge ' + L.money(need) + ' ex GST' : 'On the ' + L.qtyText(target) + '% target';
+    tiles.push(el('div', { class: 'margin-tile' + (t.margin_ex_gst < 0 || low ? ' warn' : '') }, el('span', { text: 'Margin' }),
+      el('strong', { text: L.money(t.margin_ex_gst) + (t.margin_pct != null ? '  (' + t.margin_pct.toFixed(1) + '%)' : '') }),
+      note ? el('small', { text: note }) : null));
+    return tiles;
+  }
+
+  // Private quotes, and any job while the server sends no settings, get the one markup
+  // question as before. An insurance repair is priced from the settings: Labour lines at the
+  // labour rate, Material lines at cost times the multiplier. Markup is only asked for Other
+  // lines and for a type whose setting is not set, and the dialog says which is missing.
   async function fillFromCosts(ed) {
+    var settings = settingsOf(state.bundles[ed.job.id]);
+    var rules = settings && isRepair(ed.job) ?
+      { lane: 'repair', labourRate: settings.labour_rate_ex_gst, materialsMultiplier: settings.materials_multiplier } : { lane: 'private' };
+    var need = L.fillNeeds(ed.draft.cost_lines, rules);
     var input = el('input', { type: 'text', inputmode: 'decimal', value: String(store.getJSON('qb:markup') || 30) });
-    var pct = await modal({ title: 'Fill charge lines from costs', body: el('div', null,
-      el('p', { text: 'Makes one client line per cost line at this markup. You can edit every line after.' }),
-      el('div', { class: 'field' }, el('label', { text: 'Markup %' }), input)),
+    var body;
+    if (rules.lane === 'repair') {
+      body = el('div', { class: 'fill-rules' },
+        el('p', { text: 'Makes one client line per cost line. You can edit every line after.' }),
+        el('p', { class: rules.labourRate ? '' : 'unset', text: rules.labourRate ? 'Labour lines: the hours at ' + L.money(rules.labourRate) + ' an hour.' :
+          'The labour rate is not set' + (need.labourRateMissing ? ', so Labour lines use the markup below.' : '.') }),
+        el('p', { class: rules.materialsMultiplier ? '' : 'unset', text: rules.materialsMultiplier ? 'Material lines: our cost × ' + L.qtyText(rules.materialsMultiplier) + '.' :
+          'The materials multiplier is not set' + (need.materialsMultiplierMissing ? ', so Material lines use the markup below.' : '.') }),
+        need.otherLines ? el('p', { text: 'Other lines (' + need.otherLines + '): the markup below.' }) : null,
+        need.askMarkup ? el('div', { class: 'field' }, el('label', { text: 'Markup %' }), input) : null);
+    } else {
+      body = el('div', null,
+        el('p', { text: 'Makes one client line per cost line at this markup. You can edit every line after.' }),
+        el('div', { class: 'field' }, el('label', { text: 'Markup %' }), input));
+    }
+    var pct = await modal({ title: 'Fill charge lines from costs', body: body,
       buttons: [{ label: 'Cancel', value: null }, { label: 'Fill', primary: true, value: function () { return input.value; } }], dismissValue: null });
     if (pct == null) return;
-    var lines = L.chargeFromCosts(ed.draft.cost_lines, pct);
+    rules.otherMarkupPct = pct;
+    var lines = L.chargeFromCosts(ed.draft.cost_lines, rules);
     if (!lines.length) { toast('Add cost lines with a description first.', 'warn'); return; }
-    store.setJSON('qb:markup', L.num(pct));
+    if (need.askMarkup) store.setJSON('qb:markup', L.num(pct));
     var existing = ed.draft.charge_lines.filter(function (l) { return !L.isBlankLine(l) || L.hasAmounts(l); });
     ed.draft.charge_lines = existing.concat(lines);
     changed(ed);
@@ -883,10 +952,31 @@
   function drawActions(b, ed) {
     var box = ed.dom.actions;
     clear(box);
+    var qn = function () { return ed.locked && ed.latest && ed.latest.quote_number ? ed.latest.quote_number : 'DRAFT'; };
     append(box,
       el('button', { class: 'btn', text: 'Preview client PDF', onclick: function () { previewPdf(b, ed); } }),
+      docButtons(b, ed, qn),
       ed.locked ? null : el('button', { class: 'btn btn-primary btn-big', text: ed.kind === 'variation' ? 'Issue variation quote' : 'Issue client quote', onclick: function () { issue(b, ed); } }));
     append(box, el('p', { class: 'muted small', text: 'Issuing freezes this version, saves the PDF on the job' + (b.job.type === 'miscellaneous' ? '' : ' and moves the Repairs board card') + '. Nothing is emailed or texted to anyone.' }));
+  }
+
+  // The two other documents a scope makes. Both open on the iPad like the preview; neither
+  // is filed, emailed or sent. The material order list needs line types, so it only shows
+  // when the server sends the settings.
+  function docButtons(b, ed, qn) {
+    return [
+      el('button', { class: 'btn', text: 'Scope of works (no prices)', onclick: function () {
+        var o = pdfOpts(b, ed, qn());
+        openPdf(function () { return window.QBPdf.renderScope(o); }, (b.job.job_number || 'job') + '-scope-of-works.pdf', 'scope of works');
+      } }),
+      settingsOf(b) ? el('button', { class: 'btn', text: 'Material order list', onclick: function () {
+        var o = pdfOpts(b, ed, qn());
+        o.costLines = ed.draft.cost_lines;
+        var left = L.materialsBySupplier(o.costLines).not_listed;
+        if (left) toast(window.QBPdf.notListedText(left), 'warn');
+        openPdf(function () { return window.QBPdf.renderMaterials(o); }, (b.job.job_number || 'job') + '-material-order-list.pdf', 'material order list');
+      } }) : null
+    ];
   }
 
   function selectedPhotos(b, ed) {
@@ -911,15 +1001,19 @@
     document.body.appendChild(a); a.click(); a.remove();
   }
 
-  async function previewPdf(b, ed) {
+  function previewPdf(b, ed) {
+    var qn = ed.locked && ed.latest && ed.latest.quote_number ? ed.latest.quote_number : 'DRAFT';
+    return openPdf(function () { return window.QBPdf.render(pdfOpts(b, ed, qn)); }, (b.job.job_number || 'quote') + '-' + qn + '.pdf', 'preview');
+  }
+
+  async function openPdf(make, name, what) {
     // Open the tab now, inside the tap, so Safari does not block it as a pop-up.
     var win = window.open('', '_blank');
-    if (win) { try { win.document.title = 'Preparing quote…'; win.document.body.textContent = 'Preparing the quote PDF…'; } catch (e) { /* ignore */ } }
+    if (win) { try { win.document.title = 'Preparing…'; win.document.body.textContent = 'Preparing the PDF…'; } catch (e) { /* ignore */ } }
     try {
-      var qn = ed.locked && ed.latest && ed.latest.quote_number ? ed.latest.quote_number : 'DRAFT';
-      var pdf = await window.QBPdf.render(pdfOpts(b, ed, qn));
-      openBlob(pdf.blob, win, (b.job.job_number || 'quote') + '-' + qn + '.pdf');
-      if (pdf.missingPhotos) modal({ title: 'Photos missing from the preview', body: photosMissingText(pdf.missingPhotos) + ', so the preview does not show ' + (pdf.missingPhotos > 1 ? 'them' : 'it') + '. Check your signal and preview again.' });
+      var pdf = await make();
+      openBlob(pdf.blob, win, name);
+      if (pdf.missingPhotos) modal({ title: 'Photos missing from the ' + what, body: photosMissingText(pdf.missingPhotos) + ', so the ' + what + ' does not show ' + (pdf.missingPhotos > 1 ? 'them' : 'it') + '. Check your signal and ' + (what === 'preview' ? 'preview' : 'open it') + ' again.' });
     } catch (e) {
       if (win) win.close();
       toast('Could not make the PDF: ' + (e.message || e), 'error');
@@ -1039,6 +1133,7 @@
   // ---------- History ----------
   function versionRows(b, chain, label) {
     var docs = b.documents || [];
+    var typed = !!settingsOf(b);
     return chain.versions.slice().reverse().map(function (v) {
       var d = docs.filter(function (x) { return x.version_id === v.id; })[0];
       return el('tr', null,
@@ -1046,6 +1141,7 @@
         el('td', null, el('span', { class: 'pill ' + (v.status === 'issued' ? 'pill-client' : 'pill-warn'), text: v.status })),
         el('td', { text: L.fmtDate(v.issued_at || v.updated_at) }),
         el('td', { class: 'r', text: L.money(v.cost_total_ex_gst) }),
+        typed ? el('td', { class: 'r', text: L.hoursText(L.labourAllowed(v.cost_lines).hours) }) : null,
         el('td', { class: 'r', text: L.money(v.charge_total_ex_gst) }),
         el('td', { class: 'r' + (v.margin_ex_gst < 0 ? ' neg' : ''), text: L.money(v.margin_ex_gst) + (v.margin_pct != null ? ' (' + Number(v.margin_pct).toFixed(1) + '%)' : '') }),
         el('td', null, d && d.url ? el('a', { href: d.url, target: '_blank', rel: 'noopener', text: d.quote_number || 'PDF' }) : (v.quote_number || '')));
@@ -1054,7 +1150,9 @@
 
   function renderHistory(main, b) {
     flushEditor();
-    var head = el('tr', null, ['Version', 'Status', 'Date', 'Allowed (cost)', 'Quoted (ex GST)', 'Margin', 'PDF'].map(function (h, i) { return el('th', { class: i >= 3 && i <= 5 ? 'r' : '', text: h }); }));
+    var cols = settingsOf(b) ? ['Version', 'Status', 'Date', 'Allowed (cost)', 'Labour allowed', 'Quoted (ex GST)', 'Margin', 'PDF'] :
+      ['Version', 'Status', 'Date', 'Allowed (cost)', 'Quoted (ex GST)', 'Margin', 'PDF'];
+    var head = el('tr', null, cols.map(function (h, i) { return el('th', { class: i >= 3 && i <= cols.length - 2 ? 'r' : '', text: h }); }));
     var rows = [];
     if (b.scope && b.scope.versions && b.scope.versions.length) rows = rows.concat(versionRows(b, b.scope, 'Scope'));
     (b.variations || []).forEach(function (c) { rows = rows.concat(versionRows(b, c, c.variation_number ? 'Variation ' + c.variation_number : 'Variation')); });
@@ -1070,8 +1168,10 @@
     if (b.scope) b.scope.versions.forEach(function (x) { if (x.id === versionId) { v = x; label = 'Scope'; } });
     (b.variations || []).forEach(function (c) { c.versions.forEach(function (x) { if (x.id === versionId) { v = x; label = c.variation_number ? 'Variation ' + c.variation_number : 'Variation'; } }); });
     if (!v) { append(main, el('p', { class: 'banner banner-error', text: 'Version not found.' })); return; }
+    var settings = settingsOf(b);
     var costRows = (v.cost_lines || []).map(function (l) {
-      return el('tr', null, el('td', { text: l.description }), el('td', { class: 'r', text: L.qtyText(l.qty) + ' ' + (l.unit || '') }),
+      return el('tr', null, el('td', { text: l.description }), settings ? el('td', { text: L.lineTypeLabel(L.lineType(l)) }) : null,
+        el('td', { class: 'r', text: L.qtyText(l.qty) + ' ' + (l.unit || '') }),
         el('td', { class: 'r', text: L.money(l.unit_cost_ex_gst) }), el('td', { text: l.supplier_or_trade || '' }),
         el('td', { class: 'r', text: L.money(l.line_total_ex_gst != null ? l.line_total_ex_gst : L.costLineTotal(l)) }));
     });
@@ -1089,12 +1189,14 @@
       v.narrative ? el('p', { class: 'v-narrative', text: v.narrative }) : null,
       el('div', { class: 'margin-strip' },
         el('div', null, el('span', { text: 'Allowed (cost)' }), el('strong', { text: L.money(v.cost_total_ex_gst) })),
+        settings ? el('div', { class: 'labour-tile' }, el('span', { text: 'Labour allowed' }), el('strong', { text: L.hoursText(L.labourAllowed(v.cost_lines).hours) }),
+          el('small', { text: 'costs us ' + L.money(L.labourAllowed(v.cost_lines).cost_ex_gst) })) : null,
         el('div', null, el('span', { text: 'Quoted (ex GST)' }), el('strong', { text: L.money(v.charge_total_ex_gst) })),
         el('div', null, el('span', { text: 'Quoted (inc GST)' }), el('strong', { text: L.money(v.charge_total_inc_gst) })),
         el('div', { class: v.margin_ex_gst < 0 ? 'warn' : '' }, el('span', { text: 'Margin' }), el('strong', { text: L.money(v.margin_ex_gst) + (v.margin_pct != null ? ' (' + Number(v.margin_pct).toFixed(1) + '%)' : '') }))),
       el('div', { class: 'compare' },
         el('section', { class: 'card internal' }, el('h2', { text: 'Allowed: what it costs us' }),
-          el('div', { class: 'table-scroll' }, el('table', { class: 'hist' }, el('thead', null, el('tr', null, el('th', { text: 'Description' }), el('th', { class: 'r', text: 'Qty' }), el('th', { class: 'r', text: 'Unit cost' }), el('th', { text: 'Supplier' }), el('th', { class: 'r', text: 'Total' }))), el('tbody', null, costRows)))),
+          el('div', { class: 'table-scroll' }, el('table', { class: 'hist' }, el('thead', null, el('tr', null, el('th', { text: 'Description' }), settings ? el('th', { text: 'Type' }) : null, el('th', { class: 'r', text: 'Qty' }), el('th', { class: 'r', text: 'Unit cost' }), el('th', { text: 'Supplier' }), el('th', { class: 'r', text: 'Total' }))), el('tbody', null, costRows)))),
         el('section', { class: 'card client' }, el('h2', { text: 'Quoted: what we charge' }),
           el('div', { class: 'table-scroll' }, el('table', { class: 'hist' }, el('thead', null, el('tr', null, el('th', { text: 'Description' }), el('th', { class: 'r', text: 'Qty' }), el('th', { class: 'r', text: 'Unit price' }), el('th', { text: '' }), el('th', { class: 'r', text: 'Total' }))), el('tbody', null, chargeRows))))),
       photos.length ? el('section', { class: 'card' }, el('h2', { text: 'Photos on this version' }),

@@ -1,4 +1,5 @@
-// Pure logic for the quote builder: money, lines, totals, job grouping, draft keys.
+// Pure logic for the quote builder: money, lines, totals, line types and pricing rules, the
+// material order list, job grouping, draft keys.
 // No DOM and no network here, so the same file runs in the page and under `node --test`.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -23,6 +24,13 @@
   ];
 
   var UNITS = ['item', 'm', 'm2', 'lm', 'hr', 'day', 'ea', 'sheet', 'lot'];
+
+  // What a cost line is. Labour is always in hours, so its quantity is the hours allowed.
+  var LINE_TYPES = [
+    { value: 'material', label: 'Material' },
+    { value: 'labour', label: 'Labour' },
+    { value: 'other', label: 'Other' }
+  ];
 
   var PRIVATE_CATEGORIES = [
     { value: 'private_renovation', label: 'Private renovation' },
@@ -87,7 +95,7 @@
   function newLineId(kind) { return (kind === 'charge' ? 'q-' : 'c-') + randomHex(8); }
 
   function blankCostLine() {
-    return { line_id: newLineId('cost'), description: '', qty: 1, unit: 'item', unit_cost_ex_gst: 0, supplier_or_trade: '' };
+    return { line_id: newLineId('cost'), line_type: 'material', description: '', qty: 1, unit: 'item', unit_cost_ex_gst: 0, supplier_or_trade: '' };
   }
 
   function blankChargeLine() {
@@ -131,11 +139,13 @@
 
   function cleanCostLines(lines) {
     return (lines || []).filter(function (l) { return !isBlankLine(l); }).map(function (l) {
+      var type = lineType(l);
       return {
         line_id: l.line_id || newLineId('cost'),
+        line_type: type,
         description: String(l.description).trim().slice(0, 2000),
         qty: num(l.qty),
-        unit: String(l.unit || '').trim() || 'item',
+        unit: type === 'labour' ? 'hr' : String(l.unit || '').trim() || 'item',
         unit_cost_ex_gst: round2(num(l.unit_cost_ex_gst)),
         supplier_or_trade: String(l.supplier_or_trade || '').trim()
       };
@@ -155,19 +165,115 @@
     });
   }
 
-  // Turn cost lines into client charge lines at a markup, as a starting point Hugo then edits.
-  function chargeFromCosts(costLines, markupPct) {
-    var m = 1 + num(markupPct) / 100;
+  // Turn cost lines into client charge lines, as a starting point Hugo then edits.
+  // rules = { lane, labourRate, materialsMultiplier, otherMarkupPct }. On an insurance repair
+  // job ('repair' lane) an hour of labour is charged at the labour rate whatever it costs us,
+  // and a material at its cost times the multiplier. Other lines, a type whose setting is not
+  // set, and every line on a private quote take the markup percent.
+  function chargeFromCosts(costLines, rules) {
+    var insurance = rules.lane === 'repair';
+    var rate = insurance ? positiveOrNull(rules.labourRate) : null;
+    var mult = insurance ? positiveOrNull(rules.materialsMultiplier) : null;
+    var m = 1 + num(rules.otherMarkupPct) / 100;
     return cleanCostLines(costLines).map(function (l) {
+      var price = l.line_type === 'labour' && rate ? rate :
+        l.line_type === 'material' && mult ? l.unit_cost_ex_gst * mult : l.unit_cost_ex_gst * m;
       return {
         line_id: newLineId('charge'),
         description: l.description,
         qty: l.qty,
         unit: l.unit,
-        unit_price_ex_gst: round2(l.unit_cost_ex_gst * m),
+        unit_price_ex_gst: round2(price),
         gst_applies: true
       };
     });
+  }
+
+  // ---------- Line types, pricing settings, labour and materials ----------
+  // A cost line saved before types existed has none. It reads as Other and is never rewritten
+  // unless Hugo edits and saves that draft.
+  function validType(t) { return t === 'material' || t === 'labour' || t === 'other' ? t : null; }
+  function lineType(l) { return validType(l && l.line_type) || 'other'; }
+  function lineTypeLabel(t) {
+    for (var i = 0; i < LINE_TYPES.length; i++) if (LINE_TYPES[i].value === t) return LINE_TYPES[i].label;
+    return 'Other';
+  }
+
+  function positiveOrNull(v) { var x = num(v); return x > 0 ? x : null; }
+
+  // The pricing settings the server sends with a job (quote_builder_get_job `settings`). The
+  // numbers live on the server only: this site is public, so none is ever written in this
+  // repo. A server that does not send them yet gives null, and the app then behaves as it
+  // did before line types existed. A setting that is missing or not a number is null.
+  function pricingSettings(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    var target = num(raw.target_margin_pct);
+    return {
+      labour_rate_ex_gst: positiveOrNull(raw.labour_rate_ex_gst),
+      materials_multiplier: positiveOrNull(raw.materials_multiplier),
+      target_margin_pct: target > 0 && target < 100 ? target : null
+    };
+  }
+
+  // Labour allowed for the job: the hours on Labour lines and what they cost us. With a
+  // labour rate it also gives what those hours are charged at.
+  function labourAllowed(costLines, labourRate) {
+    var hours = 0, cost = 0;
+    (costLines || []).forEach(function (l) { if (lineType(l) === 'labour') { hours += num(l.qty); cost += costLineTotal(l); } });
+    hours = Math.round((hours + Number.EPSILON) * 1000) / 1000;
+    var rate = positiveOrNull(labourRate);
+    return { hours: hours, cost_ex_gst: round2(cost), charge_ex_gst: rate ? round2(hours * rate) : null };
+  }
+
+  function hoursText(h) { var x = qtyText(h); return x + (x === '1' ? ' hour' : ' hours'); }
+
+  // What the quote must charge (ex GST) for the margin to reach the target; null with no target.
+  function chargeForTarget(costTotal, targetPct) {
+    var t = num(targetPct);
+    if (!(t > 0 && t < 100)) return null;
+    return round2(num(costTotal) / (1 - t / 100));
+  }
+
+  // What Fill from costs has to ask before it can price these lines: Other lines always go
+  // through the markup question, and so does a type whose setting is not set.
+  function fillNeeds(costLines, rules) {
+    rules = rules || {};
+    var insurance = rules.lane === 'repair';
+    var n = { labour: 0, material: 0, other: 0 };
+    cleanCostLines(costLines).forEach(function (l) { n[l.line_type]++; });
+    var rateMissing = insurance && n.labour > 0 && !positiveOrNull(rules.labourRate);
+    var multMissing = insurance && n.material > 0 && !positiveOrNull(rules.materialsMultiplier);
+    return {
+      labourRateMissing: rateMissing, materialsMultiplierMissing: multMissing, otherLines: n.other,
+      askMarkup: !insurance || n.other > 0 || rateMissing || multMissing
+    };
+  }
+
+  // The material order list: Material cost lines grouped by supplier A to Z, lines with no
+  // supplier last. It carries our costs, so it is internal and never goes to the client.
+  // not_listed counts the Other lines (and lines saved before types existed) it leaves off.
+  function materialsBySupplier(costLines) {
+    var map = {}, names = {}, notListed = 0;
+    cleanCostLines(costLines).forEach(function (l) {
+      if (l.line_type === 'other') notListed++;
+      if (l.line_type !== 'material') return;
+      var k = l.supplier_or_trade.toLowerCase();
+      if (!map[k]) { map[k] = []; names[k] = l.supplier_or_trade; }
+      map[k].push({ line_id: l.line_id, description: l.description, qty: l.qty, unit: l.unit,
+        unit_cost_ex_gst: l.unit_cost_ex_gst, line_total_ex_gst: costLineTotal(l) });
+    });
+    var total = 0, count = 0;
+    var groups = Object.keys(map).sort(function (a, b) {
+      if (!a) return 1;
+      if (!b) return -1;
+      return a.localeCompare(b);
+    }).map(function (k) {
+      var sub = 0;
+      map[k].forEach(function (l) { sub += l.line_total_ex_gst; });
+      total += sub; count += map[k].length;
+      return { supplier: names[k] || 'No supplier named', lines: map[k], total_ex_gst: round2(sub) };
+    });
+    return { groups: groups, total_ex_gst: round2(total), line_count: count, not_listed: notListed };
   }
 
   // The editable part of a version, in the shape quote_builder_save takes.
@@ -177,7 +283,7 @@
       title: v.title || '',
       narrative: v.narrative || '',
       cost_lines: (v.cost_lines || []).map(function (l) {
-        return { line_id: l.line_id, description: l.description || '', qty: l.qty, unit: l.unit || 'item',
+        return { line_id: l.line_id, line_type: lineType(l), description: l.description || '', qty: l.qty, unit: l.unit || 'item',
           unit_cost_ex_gst: l.unit_cost_ex_gst, supplier_or_trade: l.supplier_or_trade || '' };
       }),
       charge_lines: (v.charge_lines || []).map(function (l) {
@@ -288,11 +394,13 @@
 
   return {
     GST_RATE: GST_RATE, REPAIR_STAGES: REPAIR_STAGES, STAGE_LABELS: STAGE_LABELS, STAGE_FILTERS: STAGE_FILTERS,
-    UNITS: UNITS, PRIVATE_CATEGORIES: PRIVATE_CATEGORIES,
+    UNITS: UNITS, LINE_TYPES: LINE_TYPES, PRIVATE_CATEGORIES: PRIVATE_CATEGORIES,
     round2: round2, num: num, money: money, qtyText: qtyText, uuid: uuid, newLineId: newLineId,
     blankCostLine: blankCostLine, blankChargeLine: blankChargeLine,
     costLineTotal: costLineTotal, chargeLineTotal: chargeLineTotal, chargeLineGst: chargeLineGst, totals: totals,
     isBlankLine: isBlankLine, hasAmounts: hasAmounts, unnamedLines: unnamedLines, cleanCostLines: cleanCostLines, cleanChargeLines: cleanChargeLines, chargeFromCosts: chargeFromCosts,
+    lineType: lineType, lineTypeLabel: lineTypeLabel, pricingSettings: pricingSettings, labourAllowed: labourAllowed, hoursText: hoursText,
+    chargeForTarget: chargeForTarget, fillNeeds: fillNeeds, materialsBySupplier: materialsBySupplier,
     draftFromVersion: draftFromVersion, emptyDraft: emptyDraft, savePayload: savePayload, draftFingerprint: draftFingerprint,
     latestVersion: latestVersion, filterJobs: filterJobs, groupByBuilder: groupByBuilder,
     stageLabel: stageLabel, categoryLabel: categoryLabel, draftKey: draftKey,

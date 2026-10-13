@@ -1,5 +1,6 @@
 // In-memory stand-in for Supabase auth, Storage and the ops-api quote_builder_* actions,
-// written from secureworks-backend docs/quote-builder-contract.md (v1). Routes are
+// written from secureworks-backend docs/quote-builder-contract.md (v1) plus the additions
+// the app expects next (docs/backend-needed.md: settings and line types). Routes are
 // installed on a Playwright page, so nothing leaves the machine.
 'use strict';
 const fs = require('fs');
@@ -41,12 +42,21 @@ function seed() {
     chains: {},       // chain_id -> { job_id, kind }
     scopeChain: {},   // job_id -> chain_id
     privateReq: {},   // request_id -> job_id
-    nextMisc: 26001
+    nextMisc: 26001,
+    // Pricing settings held by the server (org_config). Test values only: the real numbers
+    // live on the server and never in this repo. Set settings to undefined to stand in for
+    // an older ops-api that does not send them or keep line types yet.
+    settings: { labour_rate_ex_gst: 95, materials_multiplier: 1.5, target_margin_pct: null }
   };
 }
 
-function costLine(l) {
-  return Object.assign({}, l, { line_id: l.line_id || 'c-' + uuid().slice(0, 8), line_total_ex_gst: r2(l.qty * l.unit_cost_ex_gst) });
+// Like ops-api normaliseCostLines: only the contract's fields are kept. A server with
+// settings keeps a valid line_type and drops any other value without refusing the line.
+function costLine(db, l) {
+  const out = { line_id: l.line_id || 'c-' + uuid().slice(0, 8), description: l.description, qty: l.qty, unit: l.unit,
+    unit_cost_ex_gst: l.unit_cost_ex_gst, line_total_ex_gst: r2(l.qty * l.unit_cost_ex_gst), supplier_or_trade: l.supplier_or_trade };
+  if (db.settings !== undefined && ['material', 'labour', 'other'].includes(l.line_type)) out.line_type = l.line_type;
+  return out;
 }
 function chargeLine(l) {
   const ex = r2(l.qty * l.unit_price_ex_gst);
@@ -101,7 +111,7 @@ function handle(db, action, q, body) {
       if (!j) return err(404, 'job_not_found');
       const cid = db.scopeChain[j.id] || null;
       const varChains = Object.keys(db.chains).filter((c) => db.chains[c].job_id === j.id && db.chains[c].kind === 'variation');
-      return { status: 200, body: {
+      return { status: 200, body: Object.assign(db.settings === undefined ? {} : { settings: Object.assign({}, db.settings) }, {
         job: publicJob(db, j),
         scope: { chain_id: cid, versions: cid ? chainVersions(db, cid) : [] },
         variations: varChains.map((c) => {
@@ -110,7 +120,7 @@ function handle(db, action, q, body) {
         }),
         photos: db.photos.filter((p) => p.job_id === j.id).map((p) => ({ id: p.id, url: p.url, caption: p.caption, taken_at: p.taken_at || null, created_at: p.created_at })),
         documents: db.documents.filter((d) => d.job_id === j.id && !d.superseded_at).map((d) => ({ id: d.id, quote_number: d.quote_number, url: d.url, version_id: d.version_id, created_at: d.created_at }))
-      } };
+      }) };
     }
     case 'quote_builder_create_private_job': {
       if (!body.request_id || !body.client_name) return err(400, 'client_name_required');
@@ -147,7 +157,7 @@ function handle(db, action, q, body) {
           variation_id: vr ? vr.id : null, issued_by: null, issued_at: null, client_pdf_document_id: null };
         db.versions.push(v);
       }
-      Object.assign(v, { title: body.title, narrative: body.narrative, cost_lines: body.cost_lines.map(costLine), charge_lines: body.charge_lines.map(chargeLine),
+      Object.assign(v, { title: body.title, narrative: body.narrative, cost_lines: body.cost_lines.map((l) => costLine(db, l)), charge_lines: body.charge_lines.map(chargeLine),
         photo_media_ids: body.photo_media_ids || [], client_snapshot: { client_name: j.client_name }, quote_number: null, updated_at: now(), _slot: null });
       totals(v);
       return { status: 200, body: { version: strip(v) } };
