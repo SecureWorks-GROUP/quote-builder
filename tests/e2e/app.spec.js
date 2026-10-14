@@ -698,9 +698,11 @@ async function scopeThreeTypes(page) {
 test('insurance repair: line types, labour allowed, and Fill from costs priced from the server settings', async ({ page }) => {
   await signIn(page);
   await page.click('.job-card:has-text("SWR-26103")');
+  await expect(page.locator('.pricing-bar')).toContainText('A goal, not a rule');
   await expect(page.locator('.pricing-bar')).toContainText('Labour $95.00 an hour');
   await expect(page.locator('.pricing-bar')).toContainText('Materials at cost × 1.5');
-  await expect(page.locator('.pricing-bar a')).toHaveCount(0);
+  await expect(page.locator('.pricing-bar')).toContainText('No target margin set');
+  await expect(page.locator('.pricing-bar a, .pricing-bar input, .pricing-bar button, .pricing-bar select')).toHaveCount(0);
 
   await expect(page.locator('.line.cost select.type')).toHaveValue('material');
   await scopeThreeTypes(page);
@@ -789,6 +791,7 @@ test('margin target: red below 15 percent while none is set; a set target replac
 
   db.settings.target_margin_pct = 35;
   await page.reload();
+  await expect(page.locator('.pricing-bar')).toContainText('Target margin 35%');
   await expect(page.locator('.margin-tile')).toContainText('(20.0%)');
   await expect(page.locator('.margin-tile')).toHaveClass(/warn/);
   await expect(page.locator('.margin-tile')).toContainText('To hit 35%, charge $153.85 ex GST');
@@ -820,21 +823,28 @@ test('a server that sends no settings yet: the quote screen works exactly as it 
   expect(db.versions[0].cost_lines[0]).not.toHaveProperty('line_type');
 });
 
-test('private quote: line types and labour show, but Fill keeps the one markup question', async ({ page }) => {
+test('private quote: no goal note, and Fill keeps the one markup for every line', async ({ page }) => {
   db.jobs.push({ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', job_number: 'SWM-26000', type: 'miscellaneous', status: 'draft', repair_stage: null, client_name: 'Jane Citizen', client_phone: '', client_email: '',
     site_address: '5 Sample Rd', site_suburb: 'Bayswater', category: 'private_renovation', created_at: new Date().toISOString() });
   await signIn(page);
   await page.click('button:has-text("Private quotes")');
   await page.click('.job-card:has-text("SWM-26000")');
+  // A private job is sent no settings, so it opens as it did before the goal: no note, no types.
   await expect(page.locator('.pricing-bar')).toHaveCount(0);
-  await scopeThreeTypes(page);
-  await expect(page.locator('.labour-tile')).toContainText('8 hours');
-  await expect(page.locator('.labour-tile')).not.toContainText('charged');
+  await expect(page.locator('select.type')).toHaveCount(0);
+  await expect(page.locator('.labour-tile')).toHaveCount(0);
+  const cost = page.locator('.line.cost');
+  await typeLine(cost.nth(0), { description: 'Fascia board', qty: 10, unit: 'm', price: 20, supplier: 'Bunnings' });
+  await page.click('button:has-text("+ Add cost line")');
+  await typeLine(cost.nth(1), { description: 'Carpenter on site', qty: 8, unit: 'hr', price: 50, supplier: 'Dave the chippy' });
+  await page.click('button:has-text("+ Add cost line")');
+  await typeLine(cost.nth(2), { description: 'Skip bin hire', qty: 1, unit: 'item', price: 200, supplier: 'Skip hire co' });
   await page.click('button:has-text("Fill from costs + markup")');
   await expect(page.locator('.modal')).toContainText('at this markup');
   await page.locator('.modal input').fill('30');
   await page.click('.modal button:has-text("Fill")');
   await expect(page.locator('.line.charge .line-total')).toHaveText(['$260.00', '$520.00', '$260.00']);
+  await expect(page.locator('.margin-tile')).not.toContainText('target');
 });
 
 test('scope of works prints the client lines with their quantities, no dollar amount, no Labour allowed section and nothing from the cost table; material order list has Material lines by supplier and nothing else', async ({ page }) => {

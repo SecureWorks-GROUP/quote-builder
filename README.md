@@ -15,8 +15,8 @@ Backend contract: secureworks-backend `docs/quote-builder-contract.md` (ops-api 
      - **Labour**: the unit locks to hours, so Qty is the hours you expect the job to take. Unit cost is what an hour costs us.
      - **Other** is for things like delivery, hire, a skip bin or a permit.
    - **Site photos**: Take photo or choose from the library, add a caption. Ticked photos go on the client quote.
-   - **Insurance pricing** (repair jobs): the bar shows the labour rate and the materials multiplier the office has set. They are the same on every iPad. They are set in the office system: the tool shows them and cannot change them.
-   - **The dark strip** shows what the job costs us, **Labour allowed** (your hours, what they cost us, what they are charged at), what is quoted, and the **Margin**. With a target margin set it goes red below the target and tells you what to charge to hit it. With no target set it says so and goes red below 15 percent, as before.
+   - **Pricing goal** (repair jobs): one small line, read only. It shows the labour rate, the materials multiplier and the target margin the office is aiming for. It is a goal, not a rule: a quote under it, or at a loss, still saves and issues. The line has nothing to edit. It is not on a private quote.
+   - **The dark strip** shows what the job costs us, **Labour allowed** (your hours, what they cost us, what they are charged at), what is quoted, and the **Margin**. With a target margin set it goes red below the target and tells you what to charge to hit it. With no target set it says so and goes red below 15 percent, as before. A loss is red either way. None of that stops you issuing.
    - **What we charge the client** (bottom): quote title, scope of works, charge lines with GST.
    - **Fill from costs** makes one client line per cost line. On a repair job: Labour lines are your hours at the labour rate, Material lines are our cost times the multiplier. It only asks for a markup % for Other lines, or when the office has not set a rate yet (it says which). On a private quote it asks for one markup % for everything, as before. Tap it once: tapping again adds the lines a second time.
 5. Three documents come from the one scope, from the buttons at the bottom:
@@ -30,11 +30,11 @@ Backend contract: secureworks-backend `docs/quote-builder-contract.md` (ops-api 
 9. **History** shows every version: what was allowed (cost and labour hours) against what was quoted.
 10. Work with no insurance job: **New private quote** makes a new SWM job with the client details.
 
-If the Type column, the Insurance pricing bar and the Material order list button are not there, the office system has not been updated yet: the tool works as it did before, with one markup % for every line.
+If the Type column, the pricing goal line and the Material order list button are not there, the office system has not sent them for this job: the tool works as it did before, with one markup % for every line. A private quote is always that way.
 
 ## Pricing settings and the back end
 
-The labour rate, the materials multiplier and the target margin are held on the server and arrive with each job. The app only shows them: there is no settings page. No pricing number is ever written in this repo: the site and its code are public. Until the server sends them the app behaves as it did before line types. What the app calls and expects, and what the back end still has to build (settings, line types, the job value, work orders and purchase orders), is in `docs/backend-needed.md`.
+The labour rate, the materials multiplier and the target margin are rows in the server's private `quote_builder_settings` table (not `org_config`) and arrive with an insurance repair job as `settings`, with `can_edit_settings: false`. The app only shows them, as one read-only goal line: there is no settings page. No pricing number is ever written in this repo: the site and its code are public. Until the server sends them, and on every private job, the app behaves as it did before line types. What the app calls and expects, and what the back end still has to build (the job value, work orders and purchase orders), is in `docs/backend-needed.md`.
 
 ## Running and testing
 

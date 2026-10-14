@@ -43,9 +43,10 @@ function seed() {
     scopeChain: {},   // job_id -> chain_id
     privateReq: {},   // request_id -> job_id
     nextMisc: 26001,
-    // Pricing settings held by the server (org_config). Test values only: the real numbers
-    // live on the server and never in this repo. Set settings to undefined to stand in for
-    // an older ops-api that does not send them or keep line types yet.
+    // Pricing settings from quote_builder_settings, not org_config. Test values only: the
+    // real numbers live on the server and never in this repo. Set settings to undefined to
+    // stand in for an older ops-api that does not send them or keep line types yet. Set it
+    // to null for a repair job whose settings read came back null.
     settings: { labour_rate_ex_gst: 95, materials_multiplier: 1.5, target_margin_pct: null }
   };
 }
@@ -111,7 +112,12 @@ function handle(db, action, q, body) {
       if (!j) return err(404, 'job_not_found');
       const cid = db.scopeChain[j.id] || null;
       const varChains = Object.keys(db.chains).filter((c) => db.chains[c].job_id === j.id && db.chains[c].kind === 'variation');
-      return { status: 200, body: Object.assign(db.settings === undefined ? {} : { settings: Object.assign({}, db.settings) }, {
+      // A private job, and an older server (settings === undefined), get neither key.
+      // A repair job gets the goal and can_edit_settings: false. settings === null is a
+      // failed read: the key is present and null, and there is still nothing to edit.
+      const goal = db.settings === undefined || j.type === 'miscellaneous' ? {} :
+        { settings: db.settings === null ? null : Object.assign({}, db.settings), can_edit_settings: false };
+      return { status: 200, body: Object.assign(goal, {
         job: publicJob(db, j),
         scope: { chain_id: cid, versions: cid ? chainVersions(db, cid) : [] },
         variations: varChains.map((c) => {
