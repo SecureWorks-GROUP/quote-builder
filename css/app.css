@@ -230,9 +230,8 @@ select.type { padding-left: 8px; padding-right: 4px; }
   .typed .line.cost .cell:nth-of-type(4) { grid-column: span 2; }
 }
 
-.pricing-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin: 16px 0 0; padding: 10px 14px; background: #fff; border: 1px solid var(--sw-border); border-left: 4px solid var(--sw-blue-dark); border-radius: 10px; }
-.pricing-bar strong { color: var(--sw-blue-dark); }
-.pricing-bar .unset, .fill-rules .unset { color: var(--warn); font-weight: 700; }
+.pricing-bar { margin: 14px 0 0; font-size: 13px; line-height: 1.4; color: var(--sw-blue-mid); }
+.fill-rules .unset { color: var(--warn); font-weight: 700; }
 
 .margin-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 16px 0; }
 .margin-strip > div { background: var(--sw-blue-dark); color: #fff; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }

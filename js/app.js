@@ -93,6 +93,10 @@
   function isRepair(job) { return job.type !== 'miscellaneous'; }
   function rateText(s) { return s.labour_rate_ex_gst ? 'Labour ' + L.money(s.labour_rate_ex_gst) + ' an hour' : 'Labour rate not set'; }
   function multiplierText(s) { return s.materials_multiplier ? 'Materials at cost × ' + L.qtyText(s.materials_multiplier) : 'Materials multiplier not set'; }
+  function targetText(s) { return s.target_margin_pct != null ? 'Target margin ' + L.qtyText(s.target_margin_pct) + '%' : 'No target margin set'; }
+  // One sentence. The figures are the owner's goal, shown as a guide. They are never a rule:
+  // nothing on this screen asks for them, and quoting, saving and issuing do not look at them.
+  function goalNote(s) { return 'A goal, not a rule. ' + rateText(s) + '. ' + multiplierText(s) + '. ' + targetText(s) + '.'; }
 
   // ---------- Shell ----------
   function topbar(back) {
@@ -439,13 +443,9 @@
       ed.dom.photos));
     drawPhotos(ed);
 
-    // The insurance pricing in force, then the margin strip, between the two halves
-    if (settings && isRepair(ed.job)) {
-      append(wrap, el('div', { class: 'pricing-bar' },
-        el('strong', { text: 'Insurance pricing' }),
-        el('span', { class: settings.labour_rate_ex_gst ? '' : 'unset', text: rateText(settings) }),
-        el('span', { class: settings.materials_multiplier ? '' : 'unset', text: multiplierText(settings) })));
-    }
+    // The pricing goal, one small read-only line, then the margin strip. Only an insurance
+    // repair that arrived with settings. can_edit_settings is false: there is no input here.
+    if (settings && isRepair(ed.job)) append(wrap, el('p', { class: 'pricing-bar', text: goalNote(settings) }));
     ed.dom.margin = el('div', { class: 'margin-strip' });
     append(wrap, ed.dom.margin);
 
