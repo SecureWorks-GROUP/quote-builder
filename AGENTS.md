@@ -10,6 +10,11 @@ This file is the project's committed home for project-intrinsic agent knowledge:
 - Brand: the business name is SecureWorks Group. `assets/logo-white.png` has the old "WA" mark cropped off; "Group" is drawn as text beside it.
 - The three PDFs follow the fence and patio quote template: source, stills and the template blocks left out are in `docs/quote-template/README.md`. Its typeface ships in `assets/fonts` (no PDF is made if it does not load). The small capital labels are the document's own fixed words: never upper-case what a person typed, and never add a template block this tool has no data for.
 
+## Project folder (six parts, R51)
+Project documents for this repo live on Marnin's Mac, outside the repo: `~/Projects/quote-tool/`.
+Before project work read that folder's `PROJECT.md` and `5-context.md`; log each run in its `6-progress.md`.
+Rules: `~/CLAUDE.md` > Project work. v1, 18 Oct 2026; Rayleigh owns it and may refine it.
+
 ## Maintaining this file
 
 Keep this file for knowledge useful to almost every future agent session in this project.
