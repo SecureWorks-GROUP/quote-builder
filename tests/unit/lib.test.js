@@ -218,6 +218,17 @@ test('labour charged: what the client lines in hours actually charge, never the 
   assert.deepEqual(L.labourCharged(null), { lines: 0, hours: 0, charge_ex_gst: 0 });
 });
 
+test('labour charged: hrs, Hr, hour, hours and h all count as hours; day and item do not', () => {
+  for (const u of ['hr', 'hrs', 'Hr', 'HRS', 'hour', 'Hours', 'h', 'hr.', ' hrs ']) assert.equal(L.isHourUnit(u), true, u);
+  for (const u of ['day', 'days', 'item', 'm', 'hrly', 'shr', '', null]) assert.equal(L.isHourUnit(u), false, String(u));
+  const charge = [
+    { description: 'Carpenter', qty: 2, unit: 'hrs', unit_price_ex_gst: 50 },
+    { description: 'Labourer', qty: 3, unit: 'Hours', unit_price_ex_gst: 40 },
+    { description: 'Supervisor', qty: 1, unit: 'day', unit_price_ex_gst: 400 }
+  ];
+  assert.deepEqual(L.labourCharged(charge), { lines: 2, hours: 5, charge_ex_gst: 220 });
+});
+
 test('a cost line saved before types existed reads as Other: not labour, not on the material list', () => {
   const old = [{ line_id: 'c-9', description: 'Labour', qty: 24, unit: 'item', unit_cost_ex_gst: 25, supplier_or_trade: '' }];
   assert.equal(L.lineType(old[0]), 'other');
