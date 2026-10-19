@@ -416,7 +416,9 @@
     if (ed.notice) append(wrap, el('p', { class: 'banner banner-warn', text: ed.notice }));
 
     // Title and scope write-up (prints on the client quote)
-    // One line of text that wraps instead of cutting off on a phone; Enter adds no new line.
+    // One line of text that wraps instead of cutting off on a phone; Enter adds no new line,
+    // and a saved title with line breaks is cleaned in the draft too (saved on the next save).
+    if (!ed.locked && /[\r\n]/.test(ed.draft.title || '')) ed.draft.title = String(ed.draft.title).replace(/[\r\n]+/g, ' ');
     var title = el('textarea', { class: 'title-input', rows: 1, placeholder: ed.kind === 'variation' ? 'Variation title, e.g. Extra fascia found rotten' : 'Quote title, e.g. Storm damage repairs', value: String(ed.draft.title || '').replace(/[\r\n]+/g, ' '), disabled: ed.locked,
       onkeydown: function (e) { if (e.key === 'Enter') e.preventDefault(); },
       oninput: function () { if (/[\r\n]/.test(title.value)) title.value = title.value.replace(/[\r\n]+/g, ' '); ed.draft.title = title.value; autoGrow(title); changed(ed); } });
