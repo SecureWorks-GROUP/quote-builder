@@ -88,8 +88,18 @@ test('scope a repair job: costs on top, client charge below, autosave, issue a P
   await expect(page.locator('.modal')).toContainText('moved from Scoping to Quoted');
   await page.click('.modal button:has-text("OK")');
 
-  const pdfKey = Object.keys(db.files).find((k) => k.startsWith('job-pdfs/'));
+  const pdfKey = Object.keys(db.files).find((k) => k.startsWith('job-pdfs/') && !k.includes('/sow-'));
   const pdf = await pdfWords(db.files[pdfKey].body);
+  // Stage 9: the scope of works is filed on the repair job beside the quote, with no prices.
+  const issued = calls('quote_builder_issue').pop().body;
+  expect(issued.extra_documents).toEqual([{ document: 'scope_of_works', pdf_path: expect.stringContaining('/sow-') }]);
+  expect(db.extraDocuments.filter((d) => !d.superseded_at).map((d) => d.document)).toEqual(['scope_of_works']);
+  const sowKey = Object.keys(db.files).find((k) => k.startsWith('job-pdfs/') && k.includes('/sow-'));
+  const sow = await pdfWords(db.files[sowKey].body);
+  expect(sow).toContain('Scope of works');
+  expect(sow).toContain('SWR-26101-Q1');
+  expect(sow).not.toContain('$');
+  for (const secret of ['Bunnings', 'Dave the chippy']) expect(sow).not.toContain(secret);
   require('fs').mkdirSync('test-results/shots', { recursive: true });
   require('fs').writeFileSync(`test-results/shots/${test.info().project.name}-quote.pdf`, db.files[pdfKey].body);
   expect(db.files[pdfKey].body.subarray(0, 4).toString('latin1')).toBe('%PDF');
@@ -711,7 +721,9 @@ test('insurance repair: line types, labour allowed, and Fill from costs priced f
   await expect(page.locator('.line.cost').nth(1).locator('input.unit')).toBeDisabled();
   await expect(page.locator('.labour-tile')).toContainText('8 hours');
   await expect(page.locator('.labour-tile')).toContainText('costs us $400.00');
-  await expect(page.locator('.labour-tile')).toContainText('charged $760.00 at $95.00 an hour');
+  // The goal rate is shown as the goal; the charge is what the client lines say (none yet).
+  await expect(page.locator('.labour-tile')).toContainText('goal $760.00 at $95.00 an hour');
+  await expect(page.locator('.labour-tile')).toContainText('no client line in hours');
 
   await page.click('button:has-text("Fill from costs")');
   await expect(page.locator('.modal')).toContainText('Labour lines: the hours at $95.00 an hour.');
@@ -729,6 +741,12 @@ test('insurance repair: line types, labour allowed, and Fill from costs priced f
   await expect(charge.nth(2).locator('.line-total')).toHaveText('$220.00');
   await expect(page.locator('.margin-strip')).toContainText('$1,280.00');
   await expect(page.locator('.margin-tile')).toContainText('$480.00  (37.5%)');
+  await expect(page.locator('.labour-tile')).toContainText('quote charges $760.00 for 8 hours');
+  // Re-price the client hours away from the goal: the tile follows the quote, not the goal.
+  await charge.nth(1).locator('input.num').nth(1).fill('40');
+  await expect(page.locator('.labour-tile')).toContainText('quote charges $320.00 for 8 hours');
+  await expect(page.locator('.labour-tile')).toContainText('goal $760.00 at $95.00 an hour');
+  await charge.nth(1).locator('input.num').nth(1).fill('95');
 
   await expect(page.locator('.save-state')).toContainText('Saved as version 1', { timeout: 10000 });
   expect(calls('quote_builder_save').pop().body.cost_lines.map((l) => [l.line_type, l.unit, l.qty])).toEqual([['material', 'm', 10], ['labour', 'hr', 8], ['other', 'item', 1]]);
@@ -829,10 +847,13 @@ test('private quote: no goal note, and Fill keeps the one markup for every line'
   await signIn(page);
   await page.click('button:has-text("Private quotes")');
   await page.click('.job-card:has-text("SWM-26000")');
-  // A private job is sent no settings, so it opens as it did before the goal: no note, no types.
+  // A private job is sent no settings: no goal note. Line types are on, so one scope gives
+  // a quote, a scope of works and a material order list on this lane too.
   await expect(page.locator('.pricing-bar')).toHaveCount(0);
-  await expect(page.locator('select.type')).toHaveCount(0);
-  await expect(page.locator('.labour-tile')).toHaveCount(0);
+  await expect(page.locator('select.type')).toHaveCount(1);
+  await expect(page.locator('.labour-tile')).toHaveCount(1);
+  await expect(page.locator('.labour-tile')).not.toContainText('goal');
+  await expect(page.locator('button:has-text("Material order list")')).toHaveCount(1);
   const cost = page.locator('.line.cost');
   await typeLine(cost.nth(0), { description: 'Fascia board', qty: 10, unit: 'm', price: 20, supplier: 'Bunnings' });
   await page.click('button:has-text("+ Add cost line")');
@@ -880,9 +901,9 @@ test('scope of works prints the client lines with their quantities, no dollar am
   for (const secret of ['Bunnings', 'Stratco', 'Dave the chippy', 'Skip hire co']) expect(scope).not.toContain(secret);
 
   await page.click('button:has-text("Material order list")');
-  await expect(page.locator('.toast')).toContainText('1 cost line is not marked Material, so it is not on this list.');
+  await expect(page.locator('.toast')).toContainText('2 cost lines are not marked Material, so they are not on this list.');
   const list = await lastPdfWords(page, 2, 'material-order-list');
-  for (const want of ['Material order list', 'Not for the client', 'Bunnings', 'Fascia board', '$20.00', '$200.00', 'Stratco', 'Colorbond gutter', '$12.50', '$75.00', 'Materials total', '$275.00', '1 cost line is not marked Material']) expect(list).toContain(want);
+  for (const want of ['Material order list', 'Not for the client', 'Bunnings', 'Fascia board', '$20.00', '$200.00', 'Stratco', 'Colorbond gutter', '$12.50', '$75.00', 'Materials total', '$275.00', '2 cost lines are not marked Material']) expect(list).toContain(want);
   expect(list.indexOf('Bunnings')).toBeLessThan(list.indexOf('Stratco'));
   // No labour, no Other line, and none of the prices the client is charged.
   for (const secret of ['Carpenter on site', 'Dave the chippy', 'Skip bin hire', 'Skip hire co', '$30.00', '$95.00', '$18.75', '$760.00']) expect(list).not.toContain(secret);

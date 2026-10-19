@@ -205,6 +205,19 @@ test('labour allowed: hours and cost from Labour lines only, charged amount when
   assert.equal(L.hoursText(7.5), '7.5 hours');
 });
 
+test('labour charged: what the client lines in hours actually charge, never the goal rate', () => {
+  const charge = [
+    { description: 'Carpenter', qty: 6, unit: 'hr', unit_price_ex_gst: 40 },
+    { description: 'Labourer', qty: 2.5, unit: 'hr', unit_price_ex_gst: 30 },
+    { description: 'Fascia board', qty: 4, unit: 'm', unit_price_ex_gst: 375 },
+    { description: '', qty: 10, unit: 'hr', unit_price_ex_gst: 99 }
+  ];
+  assert.deepEqual(L.labourCharged(charge), { lines: 2, hours: 8.5, charge_ex_gst: 315 });
+  // Hours re-worded into a lump sum are not counted as labour charged.
+  assert.deepEqual(L.labourCharged([{ description: 'All labour', qty: 1, unit: 'item', unit_price_ex_gst: 500 }]), { lines: 0, hours: 0, charge_ex_gst: 0 });
+  assert.deepEqual(L.labourCharged(null), { lines: 0, hours: 0, charge_ex_gst: 0 });
+});
+
 test('a cost line saved before types existed reads as Other: not labour, not on the material list', () => {
   const old = [{ line_id: 'c-9', description: 'Labour', qty: 24, unit: 'item', unit_cost_ex_gst: 25, supplier_or_trade: '' }];
   assert.equal(L.lineType(old[0]), 'other');
@@ -253,5 +266,6 @@ test('material order list: Material lines by supplier A to Z, no supplier last, 
   assert.deepEqual(list.groups[0].lines[0], { line_id: 'c-2', description: 'Fascia board', qty: 4, unit: 'm', unit_cost_ex_gst: 250, line_total_ex_gst: 1000 });
   assert.equal(list.total_ex_gst, 1125);
   assert.equal(list.line_count, 4);
-  assert.equal(list.not_listed, 1);
+  // The Labour and the Other line are both left off, and both counted.
+  assert.equal(list.not_listed, 2);
 });

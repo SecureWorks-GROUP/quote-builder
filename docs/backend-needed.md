@@ -124,7 +124,7 @@ Filing those two PDFs as job documents needs the back end, because the server ha
 - `quote_builder_pdf_upload_url` accepts `document`: `quote` (default), `scope_of_works` or `material_order_list`, and returns a slot for each.
 - `quote_builder_issue` accepts `extra_documents: [{ "document": "...", "pdf_path": "..." }]` and files each as its own `job_documents` row, not visible to trades, under the same `qb:<chain_id>` run label rules so a re-issue retires the earlier one.
 
-This is a proposal, not something the app calls today.
+Built (secureworks-backend PR 1036) for the scope of works only; the material order list stays unfiled because it prints our costs (contract 5.6). Since SQ-17 (19 Oct 2026) the app files the scope of works on every repair issue: it asks for the `scope_of_works` slot, uploads the PDF and names it in `extra_documents`. A private job files the quote alone.
 
 ## 6. Where the app differs from the build note, and why
 

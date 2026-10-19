@@ -193,6 +193,14 @@ function handle(db, action, q, body) {
       if (!v) return err(404, 'version_not_found');
       if (v.status !== 'draft') return err(409, 'version_frozen');
       const j = findJob(v.job_id);
+      // The scope of works has its own slot, repair jobs only (contract 5.6).
+      if (body.document === 'scope_of_works') {
+        if (j.type === 'miscellaneous') return err(400, 'invalid_input');
+        const sp = j.id + '/quotes/sow-' + v.id + '-' + uuid().slice(0, 6) + '.pdf';
+        v._sowSlot = sp;
+        return { status: 200, body: { path: sp, signed_url: SB + '/storage/v1/object/upload/sign/job-pdfs/' + sp + '?token=t', token: 't', public_url: SB + '/storage/v1/object/public/job-pdfs/' + sp } };
+      }
+      if (body.document && body.document !== 'quote') return err(400, 'invalid_input');
       let qn;
       if (v.kind === 'scope') qn = j.job_number + '-Q' + v.version;
       else {
@@ -213,6 +221,17 @@ function handle(db, action, q, body) {
       if (!v._slot || v._slot.path !== body.pdf_path) return err(409, 'pdf_not_prepared');
       if (!db.files['job-pdfs/' + body.pdf_path]) return err(409, 'upload_missing');
       const j = findJob(v.job_id);
+      // A private job never reads extra_documents; a repair job checks each before writing.
+      const extras = j.type === 'miscellaneous' ? [] : (body.extra_documents || []);
+      for (const x of extras) {
+        if (x.document !== 'scope_of_works' || x.pdf_path !== v._sowSlot) return err(400, 'invalid_input');
+        if (!db.files['job-pdfs/' + x.pdf_path]) return err(409, 'upload_missing');
+      }
+      db.extraDocuments = db.extraDocuments || [];
+      extras.forEach((x) => {
+        db.extraDocuments.filter((d) => d.chain_id === v.chain_id && !d.superseded_at).forEach((d) => { d.superseded_at = now(); });
+        db.extraDocuments.push({ id: uuid(), job_id: j.id, chain_id: v.chain_id, version_id: v.id, document: x.document, url: SB + '/storage/v1/object/public/job-pdfs/' + x.pdf_path, created_at: now() });
+      });
       db.documents.filter((d) => d.chain_id === v.chain_id && !d.superseded_at).forEach((d) => { d.superseded_at = now(); });
       const doc = { id: uuid(), job_id: j.id, chain_id: v.chain_id, version_id: v.id, quote_number: v._slot.quote_number, url: SB + '/storage/v1/object/public/job-pdfs/' + body.pdf_path, created_at: now() };
       db.documents.push(doc);

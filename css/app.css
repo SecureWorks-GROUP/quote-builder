@@ -180,7 +180,7 @@ input[type=checkbox] { width: 26px; height: 26px; accent-color: var(--sw-orange)
 .save-state.error { color: var(--err); font-weight: 700; }
 .card.internal { border-top: 4px solid var(--sw-blue-dark); }
 .card.client { border-top: 4px solid var(--sw-orange); }
-.title-input { font-weight: 700; }
+.title-input { font-weight: 700; resize: none; overflow: hidden; min-height: var(--tap); }
 .narrative { min-height: 96px; }
 
 .lines-head, .line { display: grid; gap: 8px; align-items: start; }
@@ -228,6 +228,9 @@ select.type { padding-left: 8px; padding-right: 4px; }
 @media (max-width: 900px) {
   .typed .line.cost { grid-template-columns: repeat(6, minmax(0, 1fr)); }
   .typed .line.cost .cell:nth-of-type(4) { grid-column: span 2; }
+  /* Supplier or trade sits beside Unit cost at two thirds of the row, so a name like
+     Bunnings is not cut off on a phone. */
+  .typed .line.cost .cell:nth-of-type(5) { grid-column: span 4; }
 }
 
 .pricing-bar { margin: 14px 0 0; font-size: 13px; line-height: 1.4; color: var(--sw-blue-mid); }

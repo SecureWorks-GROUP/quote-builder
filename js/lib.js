@@ -225,6 +225,18 @@
     return { hours: hours, cost_ex_gst: round2(cost), charge_ex_gst: rate ? round2(hours * rate) : null };
   }
 
+  // What the quote actually charges for labour: the client lines priced in hours. Charge
+  // lines carry no type, so the hour unit is the one sign; a labour line Hugo re-worded into
+  // a lump sum is not counted and `lines` reads 0. Never the goal rate.
+  function labourCharged(chargeLines) {
+    var hours = 0, charge = 0, lines = 0;
+    (chargeLines || []).forEach(function (l) {
+      if (isBlankLine(l) || String(l.unit || '').trim() !== 'hr') return;
+      lines++; hours += num(l.qty); charge += chargeLineTotal(l);
+    });
+    return { lines: lines, hours: Math.round((hours + Number.EPSILON) * 1000) / 1000, charge_ex_gst: round2(charge) };
+  }
+
   function hoursText(h) { var x = qtyText(h); return x + (x === '1' ? ' hour' : ' hours'); }
 
   // What the quote must charge (ex GST) for the margin to reach the target; null with no target.
@@ -255,7 +267,8 @@
   function materialsBySupplier(costLines) {
     var map = {}, names = {}, notListed = 0;
     cleanCostLines(costLines).forEach(function (l) {
-      if (l.line_type === 'other') notListed++;
+      // Labour and Other lines are never ordered; the footnote counts both.
+      if (l.line_type !== 'material') notListed++;
       if (l.line_type !== 'material') return;
       var k = l.supplier_or_trade.toLowerCase();
       if (!map[k]) { map[k] = []; names[k] = l.supplier_or_trade; }
@@ -399,7 +412,7 @@
     blankCostLine: blankCostLine, blankChargeLine: blankChargeLine,
     costLineTotal: costLineTotal, chargeLineTotal: chargeLineTotal, chargeLineGst: chargeLineGst, totals: totals,
     isBlankLine: isBlankLine, hasAmounts: hasAmounts, unnamedLines: unnamedLines, cleanCostLines: cleanCostLines, cleanChargeLines: cleanChargeLines, chargeFromCosts: chargeFromCosts,
-    lineType: lineType, lineTypeLabel: lineTypeLabel, pricingSettings: pricingSettings, labourAllowed: labourAllowed, hoursText: hoursText,
+    lineType: lineType, lineTypeLabel: lineTypeLabel, pricingSettings: pricingSettings, labourAllowed: labourAllowed, labourCharged: labourCharged, hoursText: hoursText,
     chargeForTarget: chargeForTarget, fillNeeds: fillNeeds, materialsBySupplier: materialsBySupplier,
     draftFromVersion: draftFromVersion, emptyDraft: emptyDraft, savePayload: savePayload, draftFingerprint: draftFingerprint,
     latestVersion: latestVersion, filterJobs: filterJobs, groupByBuilder: groupByBuilder,

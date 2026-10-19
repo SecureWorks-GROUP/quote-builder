@@ -125,8 +125,18 @@
       return r.photo;
     },
 
-    pdfSlot(versionId) { return call('quote_builder_pdf_upload_url', { body: { version_id: versionId } }); },
+    // document: 'quote' (the default) or 'scope_of_works' (repair jobs only).
+    pdfSlot(versionId, document) {
+      var body = { version_id: versionId };
+      if (document && document !== 'quote') body.document = document;
+      return call('quote_builder_pdf_upload_url', { body: body });
+    },
     putPdf(signedUrl, blob) { return putFile(signedUrl, blob, 'application/pdf'); },
-    issue(versionId, pdfPath) { return call('quote_builder_issue', { body: { version_id: versionId, pdf_path: pdfPath } }); }
+    // extraDocuments: [{ document: 'scope_of_works', pdf_path }], filed on the job beside the quote.
+    issue(versionId, pdfPath, extraDocuments) {
+      var body = { version_id: versionId, pdf_path: pdfPath };
+      if (extraDocuments && extraDocuments.length) body.extra_documents = extraDocuments;
+      return call('quote_builder_issue', { body: body });
+    }
   };
 })();
